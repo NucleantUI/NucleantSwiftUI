@@ -1,0 +1,955 @@
+# Process log
+
+Running notes: what was decided, why, and what state the build is in.
+The checklist lives in [plan.md](plan.md).
+
+## 0. Research pass
+
+Read, in order:
+
+| Source | What was taken from it |
+| --- | --- |
+| `research/TouchBay-UI-SDK/Sources/SDLUI` | The API shape: `View`/`ViewBuilder`/`TupleView`, `Text`/`VStack`/`Shape`, the modifier-struct style (`FrameModifier`, `BackgroundModifier`), `Alignment`, `ShapeStyle`. |
+| `PyNucleantUI/PyApi/Window/WindowBase.swift` | The exact bring-up order for a Nucleant window: `PlatformWindow` → `VulkanRenderEngine(metalLayer:)` → build tree → bind → show → seed initial size. |
+| `PyNucleantUI/PyApi/Core/RenderBinder.swift` | How a canvas becomes an engine slot: build node, `RenderNode(id:context:)`, `observeContext()`, `engine.append`. |
+| `PyNucleantUI/PyApi/Core/Canvas/ThorCanvasBase.swift` | Node adoption (`makeThorWidgetNode(adopting:)`), `markDirty()`, resize-in-place. |
+| `NucleantVulkan/.../RenderNode.swift`, `VulkanRenderNode.swift` | `RenderContainerNode` / `RenderNodeContext` — the protocols a host must satisfy. |
+| `NucleantThorVG/.../ThorShape.swift`, `ThorText.swift`, `ThorPaint.swift` | The drawing verbs available: `append_rect`, `append_circle`, `append_path`, fill/stroke/gradient, `tvg_text_*`. |
+| `NucleantApplication/.../Platform_MacOS.swift` | `PlatformWindow<W>` + `WindowBaseDelegate`, and that the display link calls `win_delegate?.onFrame(dt)`. |
+
+### Findings that shaped the design
+
+* **TouchBay never finished its render path.** `RenderNode` is an empty class,
+  `ViewGraph.evaluate` only calls `evalBody()`, `renderNote()` is a
+  `fatalError`. So the SDLUI sources are a *specification of the surface*, not
+  an implementation to port. Everything below the `View` protocol is new.
+* **`View: AnyObject` in `SwiftNucleatUI` was a dead end.** SwiftUI views are
+  value types; making them classes breaks `@ViewBuilder` ergonomics and
+  identity. `NucleantSwiftUI` uses structs, like SDLUI did.
+* **One canvas, not one per view.** `RenderBinder` gives each *widget* its own
+  GPU node because a Kivy-style widget tree is coarse. A SwiftUI tree is not —
+  a node per `Text` would be hundreds of wgpu targets. So: one window-filling
+  `ThorShaderNode`, and the view tree emits a display list into its canvas.
+  Per-view nodes stay possible later (that is what the `Later` list means).
+* **`CThorVG` is visible transitively.** It is not a product of
+  `NucleantThorVG`, but Swift re-exports imported Clang modules, so
+  `import NucleantThorVG` is enough to name `Tvg_Paint` / `tvg_shape_new()` —
+  confirmed by a probe build before any real code was written. This is the same
+  thing `PyNucleantUI/PyApi/Core/Canvas/ThorCanvasBase.swift` relies on.
+* **Plain `swift build` works here.** The "only build via ksproject" rule is
+  about the *Python wheel*; this package is pure Swift/SPM and resolves the
+  three path dependencies directly.
+
+## 1. Build state
+
+**Package graph builds with plain `swift build`.** A probe target confirmed the
+three path dependencies (`NucleantVulkan`, `NucleantThorVG`,
+`NucleantApplication`) resolve and that `CThorVG` is reachable, before any real
+code existed.
+
+## 2. Design decisions taken while writing it
+
+### Views are structs; the tree is rebuilt, the state is not
+
+`SwiftNucleatUI` (the earlier stub in this repo) made `View: AnyObject`. That
+was abandoned: `@State` identity has to come from *structural* position — the
+path of child indices from the root — and reference identity is exactly the
+thing a rebuilt tree doesn't preserve. So:
+
+* `View` is a value protocol, as in SwiftUI and SDLUI.
+* `BuildContext.path` accumulates a child index per level.
+* `StateStore` keys every `@State` slot on `(path, propertyIndex, viewType)`.
+* Property wrappers hold a `Holder` class; `Mirror` hands back a *copy* of the
+  wrapper, but the copy shares that one reference — which is what makes binding
+  through reflection work at all.
+* `ForEach` uses the element's id hash as its path component, not the ordinal,
+  so reordering a list carries each row's state with it.
+
+### One canvas per window, not one per view
+
+`RenderBinder` in PyNucleantUI gives every Kivy-style widget its own GPU node.
+A SwiftUI tree is far finer-grained — a node per `Text` would mean hundreds of
+wgpu targets and Vulkan image imports. So the whole tree lays out to absolute
+rects and emits one flat `DisplayList`, replayed onto a single window-filling
+`ThorShaderNode`'s canvas.
+
+Consequences, all deliberate:
+
+* A rebuild clears the canvas (`tvg_canvas_remove(canvas, nil)`) and re-adds
+  paints. Diffing paints across passes buys nothing while rebuilds are already
+  gated on invalidation — `ViewHost.update()` returns false and touches nothing
+  on a frame where no state changed.
+* Opacity is folded into colors at emit time rather than set per-paint, so a
+  faded gradient fades.
+* Clipping is a rect (optionally rounded) carried on each command and applied
+  as a ThorVG clipper paint. `.clipShape` therefore honours a shape's bounding
+  box and corner rounding, not an arbitrary outline.
+
+### Text is measured through ThorVG's own metrics
+
+`tvg_paint_get_aabb` is only meaningful after a canvas has updated the paint,
+and layout runs before anything is on a canvas. `TextMeasurer` instead sums
+per-glyph advances from `tvg_text_get_glyph_metrics` and takes line height from
+`tvg_text_get_text_metrics`, caching both per face. Wrapping is done in Swift
+for sizing and repeated by ThorVG for drawing — same metrics, so they agree.
+
+Fonts are loaded with `tvg_font_load_data(name:…)` rather than
+`tvg_font_load(path)`: the former lets us choose the key that
+`tvg_text_set_font` will later match, instead of guessing the family name
+inside the file. `FontRegistry` maps a `Font`'s design/weight/italic onto the
+separate face files macOS actually ships (`Helvetica Bold.ttf`, …).
+
+### Stack layout sizes least-flexible-first
+
+`StackContent` groups children into `fixed` / `content` / `flexible` and sizes
+each group against an equal share of what the stricter groups left. That is what
+makes `HStack { Text; Spacer; Text }` give the texts their natural widths
+instead of splitting the width three ways. A `Spacer` is `.flexible`, a
+`.frame(width:)` is `.fixed`, everything else is `.content`.
+
+`Spacer` and `Divider` need to know their stack's axis *before* the stack lays
+out, so `BuildContext.stackAxis` carries it down the build.
+
+### Isolation
+
+`NucleantWindow` / `WindowBaseDelegate` are non-isolated protocols, and the view
+layer is `@MainActor`. `HostingWindow` is therefore a non-isolated class whose
+callbacks each wrap their body in `MainActor.assumeIsolated` — every one of them
+is genuinely called on the main thread (AppKit dispatch, the display link), and
+this asserts it rather than assuming it.
+
+## 3. Bring-up on macOS
+
+Three real failures, in the order they showed up.
+
+1. **`tvg_wgcanvas_create` returned null.** ThorVG's engine has to be started
+   before *any* canvas exists — `PyApp.init` calls `tvg_engine_init(threads)`
+   and nothing in this package did. `AppRuntime.onStart` now calls
+   `ThorEngine.ensureInitialized` first; the renderer and text measurer keep
+   their own backstop call for a `ViewHost` driven without `NucleantApp`.
+
+2. **The window was invisible.** A window built from a bare `contentRect`
+   lands at AppKit's origin — the *bottom-left* of a screen — which on a
+   two-display setup is easy to lose entirely. `presentMacOS` now centres it.
+
+3. **`mouseUp` never arrived.** `Platform_MacOS.PlatformWindow.mouseUp` called
+   `win_delegate?.mouseDown(...)`, and `rightMouseUp` called
+   `rightMouseDown` — a copy-paste bug in NucleantApplication, not in this
+   package. It makes pointer release unreachable for *every* consumer,
+   PyNucleantUI's Python `on_mouse_up` hook included. Fixed in place
+   (`NucleantApplication/Sources/Platform_MacOS/Platform_MacOS.swift:93,109`),
+   since `Button` fires its action on release and cannot work without it.
+
+Diagnostics note: Swift's `print` is fully buffered when stdout isn't a
+terminal, so the engine's own failure messages vanish if the process is killed.
+`HostingWindow` flushes stdout before writing its own failure line to stderr,
+which is what made (1) visible at all.
+
+## 4. Verified on macOS
+
+`swift build` at the package root, then `.build/debug/NucleantSwiftUIDemo`.
+
+* The window comes up, the ThorVG node imports as a VkImage
+  (`VK_EXT_metal_objects`), and the tree draws: text, gradients, rounded
+  rects, capsules, a scroll region, buttons.
+* Input works end to end. Three synthetic clicks on the demo's `+` button take
+  the counter from 0 to 3 — press → release-inside → action → `@State` write →
+  `Invalidator` → rebuild on the next display-link tick → repaint.
+* `NUCLEANT_SWIFTUI_TRACE_INPUT=1` traces hit testing to stderr; it is what
+  distinguished "the click missed" from "the click never arrived" while
+  chasing the `mouseUp` bug above.
+
+Note on driving it from a script: `System Events`' `click at` only exercises
+the accessibility layer, which an `NSWindow` with no AX children ignores
+entirely — it reports success and does nothing. Real verification needs a
+`CGEvent` posted to `.cghidEventTap`.
+
+## 5. The UI was unusably slow — measured, then fixed
+
+Reported as "ultra slow responsive UI". Instrumented rather than guessed at, and
+the numbers were unambiguous:
+
+```
+[perf] rebuild 356.4ms  measures=258 resolves=280 nodes=195 sizeThatFits=567
+[font] load Helvetica from /System/Library/Fonts/Helvetica.ttc -> FAIL (1.4ms, attempt #29)
+...1963 load attempts over one 25s run, nearly all the same failing file
+```
+
+Every interaction cost a ~356ms rebuild. Three compounding causes:
+
+### 1. ThorVG cannot load `.ttc`, and failures were not cached (~85% of the cost)
+
+macOS ships Helvetica and Menlo *only* as TrueType Collections. ThorVG's loader
+rejects a collection outright — but `FontRegistry` remembered only successes, so
+every call re-read the whole ~1MB file and re-failed, at ~1.3ms a go. Font
+resolution sits on the layout hot path (every text measurement asks for it), so
+one rebuild burned ~300ms re-reading one unparseable file 280 times.
+
+Fixed three ways, all of which were missing: a `Font → face name` resolution
+cache so the search runs once per distinct font; a `failed` set so an unusable
+face is never retried; and `.ttc` dropped from the searched extensions, which
+turns the whole thing into a `stat` miss. The built-in face lists were also
+reordered to put a `.ttf` that actually parses first (Helvetica Neue / Monaco
+ahead of Helvetica / Menlo).
+
+### 2. Layout re-measured the same subtrees over and over
+
+195 nodes took 567 `sizeThatFits` calls, because `place` re-measures what the
+measuring pass already computed — a stack measures every child to size the run,
+then measures again to position them, and every level above repeats that for its
+whole subtree. `ViewNode` now memoizes measurements by proposal, and
+`TextMeasurer` caches measured boxes by (string, font, proposal, line limit).
+Nodes are rebuilt each pass, so there is nothing to invalidate.
+
+### 3. The canvas was re-rasterized every frame, changed or not
+
+`RenderContainerNode.needsRender` starts `true`, and the upstream ThorVG node
+deliberately never clears it (the comment in `ThorShaderNode.update` says so —
+it predates anything actually driving updates). So `canvas.draw()` + `sync()`
+re-ran on every display-link tick over an unchanged scene.
+
+`NucleantRenderNode.update` now clears the flag once it has drawn, and
+`HostingWindow.markNeedsRedraw()` re-arms it when — and only when — a rebuild
+actually repainted. Compositing is unaffected: the engine walks every slot and
+samples its image regardless of the flag, and a slot stays in the engine's
+`readable` set once published, so the last-drawn frame keeps being presented.
+
+Re-arming is done on the slot directly rather than through the Observation
+chain: that only fires on a *change* to `node.dirty`, so a repaint while `dirty`
+was already `true` would post no notification and the canvas would never redraw
+again.
+
+### Result
+
+```
+[perf] rebuild 10.2ms nodes=195 measured=307 text=165   <- first, cold caches
+[perf] rebuild  4.0ms nodes=195 measured=307 text=0     <- click on "+"
+[perf] rebuild  4.1ms nodes=195 measured=307 text=6     <- only the changed label
+font load attempts: 0 after warm-up                      (was 1963)
+```
+
+**356ms → 4ms on the interactive path** (~89×), and idle frames now skip
+canvas rasterization entirely. `text=0` on the second pass is the measurement
+cache surviving across rebuilds — only a label whose string actually changed
+gets re-measured. `measured=307` stays flat because the *node* cache is
+per-pass by design: nodes are rebuilt each time, so their caches die with them. `NUCLEANT_SWIFTUI_TRACE_PERF=1` prints the rebuild line; its counters are cache
+*misses*, so numbers that climb pass over pass mean something is defeating a
+cache.
+
+Still on the list, and a different thing from the above: the renderer clears the
+canvas and re-adds every paint on a repaint. That is now only paid when the tree
+actually changed, but a per-command diff would make a small change cost a small
+repaint rather than a whole-scene one.
+
+## 6. Real change detection — I was wrong about TouchBay
+
+I claimed in §0 that TouchBay's `@State` never detected changes. That is true of
+`SDLUI` — `isUpdated` is hardcoded `return true` and `wrappedValue`'s getter is
+a `fatalError` — but **not** of `TouchBayUI_old`, the older framework in the
+same repo, which has the real thing:
+
+* `State.Storage` carries a `version`, bumped on every write.
+* Reading `wrappedValue` during a body evaluation calls
+  `ViewGraph.registerStateOwner` and `node.recordStateDependency(key:version:)`.
+* Writing calls `markStateDirty(stateKey:)`, which dirties **only the node that
+  owns that state** and propagates a `hasDirtyDescendant` flag up its ancestors.
+* `ViewNode.hasChangedDependencies()` compares recorded versions against current
+  ones, so a clean subtree can skip its body entirely.
+
+My first version had none of that: one global boolean, and a full rebuild of the
+whole tree on any write. It detected *that* something changed, never *what*.
+Measured on the demo, the build phase was 2.6–3.1ms of a 4ms rebuild — so this
+was also the largest remaining cost, not just an architectural complaint.
+
+### What replaced it
+
+* `StateStorage` carries a `version` and the `ownerPath` of the view that
+  declared it. `@State`'s setter and any `Binding` derived from it both go
+  through one `set(_:)`, so neither can bump the version without invalidating.
+* `DependencyTracker` publishes the identity currently being built;
+  `@State`'s *getter* reports reads against it. Same shape as
+  `ViewGraphBuilder.currentBuildNode`.
+* `Invalidator` collects dirty **paths** instead of a boolean.
+* `buildNode` files a `RebuildRecords` entry per path: the environment at that
+  point and a closure that rebuilds *that view* there, plus the node it
+  produced.
+* `ViewHost.rebuildScoped` rebuilds only the dirty subtrees and splices each
+  one into its parent (`ViewNode.replaceChild`), then clears the cached
+  measurements of every ancestor — each of those was computed from the subtree
+  just replaced.
+
+Rebuilding from the state's owner *downwards* is what makes this correct, not
+just cheap. Nothing above the dirty view re-runs, so nothing above it can have
+handed it different inputs — the stale-props hazard of skipping a child's body
+never arises.
+
+### Two bugs found while verifying, one hiding the other
+
+The first scoped run reported `scoped` but still built all 195 nodes. Cause:
+`buildNode` recorded *how* to rebuild each path but never *which node* that path
+produced, so every scoped attempt found nothing to splice and silently fell
+back. It was silent because the trace printed the rebuild kind decided *before*
+the fallback — a log reporting the plan rather than the outcome. Both fixed; the
+trace now distinguishes `full` / `scoped(n)` / `fallback`.
+
+### Result
+
+```
+[perf] full        10.2ms built=209   <- first build
+[perf] scoped(1)    1.3ms built=8     <- button press (@State on Button)
+[perf] scoped(2)    2.1ms built=20    <- press + release (Button + Counter)
+[perf] fallback     5.1ms built=209   <- @State owned by the *root* view
+```
+
+**Honest limit:** state declared on the root view still rebuilds everything,
+because the dirty subtree *is* the tree — the demo's `tracks` array lives on
+`ContentView`, so a fader drag takes the `fallback` path at ~5ms a frame (13
+rebuilds over one drag, all inside a 16ms budget). Making that scoped needs
+child-level view-value diffing — comparing a freshly built child view against
+the previous one and reusing its subtree when equal, which is how SwiftUI avoids
+re-running every row of a `ForEach`. `TouchBayUI_old` doesn't do that either.
+Getting it wrong shows stale UI, so it is on the Later list rather than guessed
+at.
+
+## 7. Faders and Reset
+
+Both reported broken. Both were:
+
+* **Faders didn't move** — the framework had no drag gesture at all, only taps.
+  Added `DragGesture` with `onChanged`/`onEnded`, a `minimumDistance`
+  threshold, and drag routing in `ViewHost.pointerMoved` that keeps reporting to
+  the view the gesture *started* on even after the pointer leaves it.
+  `DragGesture.Value` carries `bounds` — not a SwiftUI field, but without a
+  `GeometryReader` a fader has no other way to turn a position into a fraction.
+* **Reset did nothing** — `Button("Reset") {}`, an empty action I wrote. Now
+  restores the default levels, which meant making the track list `@State` and
+  passing each row a `Binding`.
+
+### A layout bug the faders exposed
+
+The fills rendered at the wrong width *and* the wrong position: an 82% fader
+came out 443pt wide, centred inside a correct 541pt box. The fraction was being
+applied twice — `place` re-derived each child's size by re-proposing
+`ProposedSize(rect.size)`, and for a node whose size is a *function* of its
+proposal that compounds.
+
+Fixed by threading the proposal through placement:
+`place(in:proposal:context:into:)`, where `proposal` is the one that produced
+`rect`. SwiftUI's `placeSubviews(in:proposal:subviews:)` does the same, for the
+same reason. `StackContent.layout` now returns the per-child proposals it used
+so placement can reuse them rather than invent new ones. This was a latent bug
+for any proposal-dependent sizing, not just faders — the fader is simply the
+first view that had any.
+
+`NUCLEANT_SWIFTUI_TRACE_LAYOUT=1` dumps the placed display list, which is what
+turned "the bars look wrong" into "443.78 centred in 541.20" in one run.
+
+## 8. NavigationStack and the Shader view
+
+### NavigationStack
+
+Pure view layer, no GPU work. `NavigationStack` owns the screen list in
+`@State`; `NavigationLink` reaches the enclosing stack through a
+`NavigationRouter` handed down the environment, which writes back through the
+stack's own `Binding`. So a push invalidates the stack's subtree and nothing
+else. Only the top screen is built — the ones underneath are off screen, and
+building them would run their `onAppear` too.
+
+Two deviations from SwiftUI, both from the same missing piece: there is no
+preference system, so a child cannot hand a value *up*. The root's title is
+therefore given to `NavigationStack(_:)` rather than set with
+`.navigationTitle` inside it, and a pushed screen's title comes from the
+`NavigationLink` that pushed it.
+
+### The Shader view
+
+A vector canvas cannot run a fragment shader, so a `Shader` view cannot draw
+into the shared ThorVG canvas the way every other view does. It gets **its own
+GPU node**, composited into its own rect — which is what
+`RenderContainerNode.compositeRect` has always been for, and what the "make a
+new OpenGL node" instruction pointed at.
+
+What was already there, and what wasn't:
+
+| Piece | Status |
+| --- | --- |
+| `OGLShaderNode` — dispatch, barriers, teardown | Complete, but **never constructed**: no factory anywhere, and the engine's own `update(_ node: OGLShaderNode…)` is commented out |
+| `VKShaderCompiler.tryCompileCompute` (GLSL 450 → SPIR-V via shaderc) | Works, used as-is |
+| `VulkanCore.createStorageImage` | Exists, but is a method on the `VulkanCore` bootstrap class, not on `VulkanContext` — unreachable from the render engine, so re-written against the engine |
+| `VulkanContext.createBuffer`, `ShaderModuleLoader` | Used as-is |
+| Descriptor/pipeline setup | New (`ShaderPipeline`), modelled on `CanvasShader`'s `CanvasPostPipeline` but with a storage-image output instead of a sampled input |
+
+**Uniforms without touching the engine.** `OGLShaderNode.update` binds a
+pipeline and dispatches; it never pushes constants. Rather than change the
+engine, `time` / `resolution` / `mouse` go through a HOST_VISIBLE|COHERENT
+uniform buffer at binding 1, rewritten from the host each frame — a plain
+memcpy needing no command-buffer participation, so the existing `update` works
+untouched.
+
+**Slot lifetime is the real work.** A shader's node has to be created when the
+view appears, moved and resized as it is laid out, and destroyed when it goes
+away. `ShaderSlotRegistry` keys slots on the view's structural path — the same
+identity `@State` uses — so a shader keeps its compiled pipeline across
+rebuilds. `ShaderContent.place` claims its slot and writes its rect; anything
+unclaimed at the end of the pass is torn down (drained first, then
+`engine.remove(id:)` and `destroyResources`). Only a *resize* or a source
+change rebuilds the GPU objects; moving a view just rewrites `compositeRect`,
+which the engine re-reads every frame.
+
+**Shaders are never idle.** §5 made idle frames free by clearing `needsRender`
+after a draw. A shader is animated by definition, so `ShaderSlotRegistry.tick`
+re-arms its slot and advances its clock every frame. A tree containing no
+`Shader` view does nothing there — the cost is opt-in, per shader.
+
+GLSL contract: the body is written in fragment terms (`uv`, `fragCoord`,
+`time`, `resolution`, `mouse` in scope, assign `fragColor`) and wrapped into a
+`local_size_x = 8, local_size_y = 8` compute shader — matching the `(w + 7) / 8`
+dispatch in `OGLShaderNode.update` exactly. Source starting with `#version` is
+passed through as a complete compute shader instead. TouchBay's
+`Shaders/PlasmaShader.swift` ported across almost verbatim.
+
+**Limit:** a shader view is composited by the engine, not painted into the
+canvas, so canvas-level clipping does not apply to it — `.cornerRadius` on a
+`Shader` has no effect, and it always composites as a rectangle.
+
+### Two crashes tearing a shader slot down
+
+Navigating *back* off the shader screen segfaulted. Both causes were mine.
+
+1. **Double free.** `ShaderSlotRegistry.destroy` called
+   `engine.remove(id:)` *and* `node.destroyResources(engine)`. But
+   `VulkanRenderEngine.remove(id:)` already calls `destroyResources` on the
+   slot it drops — so the image, view and memory were freed twice.
+
+2. **Freeing inside the frame.** With the double free gone it still crashed, in
+   `OGLShaderNode.destroyResources` → MoltenVK, null deref. `endPass` runs
+   inside `ViewHost.layoutAndRender`, i.e. mid-frame, with command buffers for
+   frames still in flight referencing the image — and a `vkDeviceWaitIdle`
+   right there was not enough to make it safe.
+
+   Fixed by splitting detach from free: `endPass` takes the slot out of
+   `engine.nodes` and clears the engine's per-slot caches
+   (`invalidateComposite`), which is all that has to happen immediately, and
+   queues the GPU objects. `releasePending` frees them at the top of the next
+   frame behind one drain, outside any recording.
+
+The crash reports (`~/Library/Logs/DiagnosticReports/*.ips`) named the faulting
+frame directly, which is what made these quick — worth remembering, because the
+process just vanishes otherwise and the log says nothing.
+
+Verified after the fix: navigate in → plasma renders and animates (two captures
+four seconds apart differ), navigate back → shader gone, `About` restored,
+process alive, no new crash report.
+
+## 9. The demo's shader showcase
+
+`NavigationStack` was already the demo's root from §8, but the shader sat two
+levels down under "About". Restructured into a gallery reached from a top-level
+"Shaders" link:
+
+```
+Nucleant Mixer ──▶ Shaders ──▶ Plasma / Motion blur / Tunnel
+               └─▶ About
+```
+
+Every gallery row carries a **live** shader thumbnail, so that one screen runs
+three compute nodes simultaneously — three GPU slots, each with its own image,
+pipeline and composite rect. That is the part worth showing: it exercises the
+per-view slot machinery at more than one slot, which the single-shader screen
+never did.
+
+### One API gap the ports exposed
+
+The first wrapper inlined the body straight into `main()`, which means a body
+could not declare a helper — GLSL has no nested function definitions, and
+TouchBay's shaders lean on file-scope helpers (`CirclesMotionBlurShader`
+declares `circle()` and `scene()` before its main). `ShaderFunction` now takes
+`functions:` alongside the body and emits it at file scope, the same split
+TouchBay's `FragShaderFunction(functions:main:)` uses. `PI` / `TAU` / `HALF_PI`
+are declared by the wrapper so every body doesn't redeclare them.
+
+Three shaders ship in the demo: `Plasma` (TouchBay's, near-verbatim),
+`Motion blur` (TouchBay's `CirclesMotionBlurShader`, which is there because it
+*needs* `functions:`), and `Tunnel` (written here, loop-heavy).
+
+## 10. The clipped navigation title
+
+Reported from a screenshot: the nav bar's "Nucleant Mixer" wrapped to two lines
+and the second was cut off by the bar's own bottom edge.
+
+**Not a fixed-size bar.** Measured across 320 / 900 / 1060pt and through a
+stepped resize, the bar sizes itself from its content correctly — 46.06pt for a
+one-line title, 72.13pt for a two-line one. The resize path relayouts properly
+too (root width tracked 900 → 950 → 1000 → 1060). So the exact clip did not
+reproduce here, and the cause of that particular frame is still unknown.
+
+Two real defects the report exposed, both fixed:
+
+1. **`.lineLimit(1)` overflowed instead of truncating.** The renderer mapped it
+   to `TVG_TEXT_WRAP_NONE`, which lets text run straight past its box — which is
+   what a clipped label looks like. Now `TVG_TEXT_WRAP_ELLIPSIS`, so a
+   one-line limit ends in "…" inside its frame.
+
+2. **The navigation title could wrap at all.** A title bar is a single line on
+   every platform, and letting the title reflow makes the bar's *height* depend
+   on the window's width — so narrowing the window pushes all the content down.
+   The title is now `.lineLimit(1)` and the bar carries `minHeight: 44`, so its
+   height no longer depends on what the title happens to be.
+
+Verified at 900 → 700 → 500 → 360 → 280pt: the bar stays 46.06pt and the title
+stays one line, truncating to "Nuclea…" rather than wrapping or overflowing.
+
+## 11. A shader library, and two things it exposed
+
+Seven shaders now ship in the framework as `ShaderLibrary` — the counterpart of
+TouchBay's `Shaders` target — rather than living in the demo. Five are ports of
+`research/TouchBay-UI-SDK/Sources/Shaders`, two written here:
+
+| Shader | Origin |
+| --- | --- |
+| Plasma | TouchBay `PlasmaShader` |
+| Motion blur | TouchBay `CirclesMotionBlurShader` |
+| Fractal pyramid | TouchBay `FractalPyramid` — 64-step raymarch |
+| Cyber Fuji | TouchBay `CyberFuji2020` — CC BY 3.0, Jan Mróz |
+| Bokeh parallax | TouchBay `BokehParalax` |
+| Frosted glass | TouchBay `SupahFrostedGlass` |
+| Tunnel | written here |
+
+Of the 15 sources in TouchBay's library, only two (`BloomingElectric`,
+`BumpedSinusoidalWarp`) are unportable as-is — they sample `iChannel` textures or
+use screen-space derivatives, neither of which a compute shader has.
+`ProteanClouds` was skipped for a softer reason: it reads `gl_FragCoord` and
+keeps mutable globals, so it needs real editing rather than a port.
+
+### Globals, not locals
+
+Porting `CyberFuji2020` forced a wrapper change. Its helpers read `time`
+directly rather than taking it as a parameter — `sun()` and `grid()` both do —
+so `time` / `resolution` / `mouse` had to move from locals in `main` to
+file-scope globals assigned at the top of it. The ShaderToy spellings
+(`iTime`, `iResolution`, `iMouse`) are declared alongside, so a port usually
+needs only its `vec2 fragCoord = TexCoord * iResolution;` preamble deleted and
+`FragColor` renamed. The body still runs inside its own `{ }` block, so a port
+that redeclares `uv` or `fragCoord` shadows rather than collides.
+
+### The ellipsis bug the gallery exposed
+
+With more screens to navigate, the title bar started reading "Shade…" for
+"Shaders" — in an 89.45pt box, with the word needing well under that.
+
+`TVG_TEXT_WRAP_ELLIPSIS` reserves room for the "…" *whenever the mode is set*.
+Layout produces a box measured to exactly fit its text, so switching every
+`.lineLimit(1)` label to ellipsis mode (§10) guaranteed every one of them lost
+characters it had room for.
+
+Fixed by deciding truncation at layout time, where the natural width is already
+known: `TextDraw.isTruncated` is set only when the string really is wider than
+its box, and the renderer picks `ELLIPSIS` or `NONE` from that. Half a point of
+slack absorbs the difference between summed glyph advances and ThorVG's own
+layout.
+
+## 12. ShaderToy sources can't be fetched from here
+
+Sixteen ShaderToy shaders were requested by URL. All of shadertoy.com is behind
+a Cloudflare interstitial from this machine — the shader page, `/embed/{id}`
+and the REST API (`/api/v1/shaders/{id}?key=…`) each return either a 403 or the
+"Just a moment…" challenge page, so even an API key would not help from here.
+
+Reconstructing them from memory was not an option: they are other people's
+work, and an approximation carrying its author's name is worse than nothing.
+
+What was built instead is the machinery that makes adding one a single line.
+
+### `ShaderFunction(shaderToy:)`
+
+Paste an unmodified ShaderToy shader — helpers and its
+`void mainImage(out vec4 fragColor, in vec2 fragCoord)` — and it is emitted at
+file scope and called once per pixel.
+
+For that to work on unmodified sources, the wrapper now declares ShaderToy's
+uniforms **with ShaderToy's types**, which the earlier aliases did not:
+`iResolution` is a `vec3` (shaders divide by `iResolution.xy` but also read
+`.z`), `iMouse` is a `vec4` (`iMouse.z > 0.0` is the standard press test), and
+`iTimeDelta` / `iFrame` exist at all. The uniform block became three `vec4`s so
+its std140 layout needs no guessing.
+
+Still incompatible, because the target is a *compute* shader rather than a
+fragment one: `iChannel0`…`iChannel3` and `texture()` against them, the
+screen-space derivatives (`fwidth`, `dFdx`, `dFdy`), and `gl_FragCoord`
+(`mainImage`'s own `fragCoord` parameter carries the same value). A shader
+using those needs reworking, not wrapping.
+
+### Compile errors are now visible
+
+`VKShaderCompiler` read shaderc's diagnostics into `_` and discarded them, so a
+rejected shader produced nothing but "build failed". It now keeps them in
+`lastErrorMessage` (additive — the return type is unchanged, so existing callers
+are unaffected), and `ShaderPipeline` puts the real GLSL error in the thrown
+message. Pasting a shader that does not compile now says which line and why.
+
+An eighth library entry, `shaderToyExample`, is written in ShaderToy's own form
+rather than ported, so the adapter itself is covered by the demo.
+
+## 13. Scrolling moved a few pixels per drag
+
+`Platform_MacOS.PlatformWindow.scrollWheel` forwarded `event.deltaX/deltaY` —
+the **legacy line-based** deltas. Two problems with that:
+
+* On a precise device (trackpad, Magic Mouse) `deltaY` reports a *fraction of a
+  line*, so a whole two-finger drag adds up to a few points.
+* On a classic wheel it reports **lines**, which the scroll view then consumed
+  as though they were points: one notch moved 1–4 points instead of ~48.
+
+`scrollingDeltaX/Y` is the value those devices actually report — points when
+`hasPreciseScrollingDeltas` is set, lines otherwise. `scrollWheel` now uses it
+and converts lines to points (16pt per line) for the non-precise case.
+
+Measured with real input afterwards: per-event deltas of 16–272 points, all
+multiples of 16 (so the reporting device is line-based, and each notch is now
+1–4 *lines* rather than 1–4 points). Previously the same input produced 1–4.
+
+This is the second bug in that file — see §3's `mouseUp` — and like that one it
+affected every consumer, PyNucleantUI's Python `on_scroll` included.
+
+## 14. Shader views ignored their container's clip
+
+A `Shader` inside the gallery's `ScrollView` scrolled straight over the
+navigation bar. §8 listed this as a limitation ("canvas-level clipping does not
+reach a shader view") — but calling it a limitation was wrong. A scroll view
+that doesn't clip its rows is a bug.
+
+The cause is the same fact: a shader view is composited by the engine into its
+own rect, so the display list's clip — which every canvas-drawn view respects —
+never applies to it.
+
+Cropping `compositeRect` would be wrong: the viewport is what maps the node's
+image onto the swapchain, so a cropped viewport *squashes* the image into the
+visible sliver instead of hiding the rest. The image must stay mapped to the
+full frame while only part of it is allowed to rasterize — which is precisely
+the difference between a viewport and a scissor, and
+`recordCompositePass` already passed the two separately.
+
+So: `RenderContainerNode` gained `compositeScissor` (default `nil`, so no
+existing node type is affected), the composite pass uses it for the scissor
+while keeping the viewport from `compositeRect`, and `ShaderContent.place`
+hands its `DrawContext.clip` to the registry, which intersects it with the
+view's own frame. Offsets are clamped to the swapchain — a scrolled-off view
+naturally produces negative and past-the-end rects, both of which Vulkan
+rejects.
+
+Verified from the layout trace on the gallery (8 rows, 620pt viewport):
+
+```
+shader rect y=106 h=68   scissor h=68   <- fully visible
+shader rect y=596 h=68   scissor h=24   <- cropped at the scroll view's edge
+shader rect y=694 h=68   scissor w=0 h=0 <- past the edge, not drawn
+```
+
+Third bug in this area found by using the thing rather than reasoning about it,
+after `mouseUp` (§3) and the scroll deltas (§13).
+
+## 15. Shaders rendered upside down
+
+ShaderToy's `fragCoord` has its origin at the **bottom-left** — y up. The
+wrapper handed the body a top-down frame:
+
+```glsl
+vec2 fragCoord = vec2(pixel) + 0.5;   // pixel.y == 0 is the TOP row
+```
+
+so every ported shader came out vertically mirrored. Invisible in a symmetric
+one (Plasma, Tunnel), obvious in anything with a horizon: `CyberFuji2020`
+draws its neon floor grid under `if (p.y < -0.2)`, and it had been appearing
+along the *top* of the frame in every screenshot.
+
+Fixed by flipping the coordinates handed to the body — not the image. The store
+location (`pixel`) is untouched, so nothing about the composite changes:
+
+```glsl
+vec2 fragCoord = vec2(float(pixel.x) + 0.5, float(size.y - pixel.y) - 0.5);
+vec2 uv        = fragCoord / resolution;
+```
+
+`mouse` / `iMouse` are flipped with them, so shader space is y-up throughout
+and matches what a pasted ShaderToy source expects.
+
+Worth noting this was invisible in the *layout* traces — the clipping work in
+§14 measured correct rects the whole time while the pixels inside them were
+upside down. Geometry being right says nothing about orientation.
+
+## 16. Node lifetime, `@View`, and reusing what is already standing
+
+Asked as "how is a shader node's lifetime handled — does every view change
+make a new RenderNode / ThorShader?", with a sketch of a `@View` macro that
+stamps each view with a call-site `ViewID` and generates a compare function
+over its properties, so the framework can keep a view's node alive and only
+update it.
+
+### What was already true
+
+GPU nodes were never per-rebuild. There is one window-filling `ThorShaderNode`
+per window (§0, "one canvas, not one per view"), and a `Shader` view's
+`OGLShaderNode` slot is keyed by structural path in `ShaderSlotRegistry` and
+survives rebuilds — it is only rebuilt on a resize or a source change, and
+torn down when the view leaves the tree (§8). So nothing on the GPU side
+churned.
+
+What *did* churn was the `ViewNode` layout tree. A `@State` write rebuilt the
+owner's whole subtree, and state on the root view rebuilt everything —
+§6's "honest limit", with "child-level view-value diffing" on the Later list.
+That is what the sketch was really after, and it is what this section adds.
+
+### Two facts about `#line` that shaped the macro
+
+The sketch had `ViewID.init(line: Int = #line, …)` used as a default argument
+of the view's own init. Measured rather than assumed, with a probe binary:
+
+* A nested magic literal names the line it is *written* on. `ViewID()` as a
+  default argument is written in the declaration, so every `Test()` got the
+  same id — the playground in `../structID.playground` reports line 15 for a
+  call on line 20.
+* SE-0422 fixes exactly this for macros: an expression macro used as a
+  parameter default is expanded at the call site. `_viewID: ViewID = #viewID`
+  works. A stored property's initializer does not get that treatment, even
+  though the memberwise init copies it — so the macro has to synthesise the
+  init itself to reach the caller.
+
+Second probe: a `View` conformance added by an extension macro does not infer
+`@MainActor` onto the struct the way `struct S: View` does, so `body` came out
+nonisolated and could not call the framework. `@View` therefore also has a
+`memberAttribute` role that stamps `@MainActor` on every computed property,
+function and initializer — and the members it generates carry the attribute
+explicitly, since the role does not reach them.
+
+### `@View`
+
+Three roles on one attribute (`Sources/NucleantSwiftUIMacros`):
+
+* extension: `View` (if not declared) and `IdentifiedView`.
+* memberAttribute: `@MainActor` as above.
+* member: `_viewID` (declaration-site default), `_isEquivalent(to:)`, and —
+  only when the struct declares no init — a memberwise-style init ending in
+  `_viewID: ViewID = #viewID`. A hand-written init keeps the declaration-site
+  id unless it takes a `_viewID` parameter itself. Properties whose type is
+  only inferred from an initializer are left at that value, not guessed at:
+  the macro sees syntax.
+
+`_isEquivalent` is one `_areEquivalent(self.p, other.p)` per stored property,
+skipping `@State` (owned, not an input) and `@Environment` (compared by the
+builder separately). Four overloads of `_areEquivalent` let the compiler pick
+the static path for `Equatable` or `ViewInput` types and a runtime one
+otherwise: `ViewInput` first, then `Equatable`, then a `Mirror` walk over
+plain structs/tuples/optionals/collections. Closures, classes and payload-less
+enums answer *no* — stale UI is the failure mode of a wrong *yes*, so every
+undecidable case is a no.
+
+`Equatable` is the wrong tool for the two inputs that matter most, which is
+why the protocol is called equivalence:
+
+* A `Binding` is compared by **source** — the state slot it was projected from
+  plus the key paths walked since (`$tracks[3].level` is
+  `(slot, [\.[3], \.level])`). Not by value: two bindings onto the same slot
+  read the same value whether it changed or not.
+* Environment values are compared per key, with a version stamp as the fast
+  path for an untouched copy.
+
+### Readers, at key-path granularity
+
+§6 recorded which state each view read, and never used it. Reuse is what
+makes the record necessary: a child whose props are unchanged but whose
+binding's target moved must not be kept. So a write now dirties the owner
+*and every reader*.
+
+First attempt tracked readers per slot, and a fader drag dirtied all seven
+rows — each reads `tracks` through its binding. Reads and writes now carry
+the binding's key-path chain down to the slot, and a write reaches a reader
+only when the two chains are nested either way: `[3].level` reaches the
+whole-array reader (`ContentView`) and row 3, not row 2. `Binding` got a
+second, chain-carrying pair of accessors for this; the public surface is
+unchanged.
+
+### The rebuild itself
+
+`buildNode` asks, before building, whether the subtree standing at this
+position from the last pass will do. Every condition is necessary and each
+has a name in the `NUCLEANT_SWIFTUI_TRACE_PERF=2` trace:
+
+| reason | what changed |
+| --- | --- |
+| `identity` | type or `_viewID` differs |
+| `stack axis` | a `Spacer`/`Divider` would size against the wrong axis |
+| `dirty` | a state write landed at or beneath this path |
+| `environment` | a value a builtin bakes in at build time differs |
+| `inputs` | `_isEquivalent` said no |
+
+Records moved from a flat `[path: Record]` to a path trie
+(`RebuildRecords`): taking a subtree out for rebuild, putting a reused one
+back, and collecting what is left over are each one pointer, not a scan of
+every key. The flat version scanned ~230 entries per reused subtree and a
+drag came out at 33ms — worse than the full rebuild it replaced. Leftovers
+after a pass are views that vanished, and only then are their `@State`,
+`onAppear` marks and reader registrations released. That replaced
+`StateStore.endFullPass`'s untouched-key sweep, which was only safe after a
+*full* pass and so let state of departed views live on until the next
+resize.
+
+`_ModifierView` carries a `key` — `["padding", insets]`, name first because
+two modifiers over the same content are the same type — so
+`Text("x").padding().background(…)` chains compare too. A modifier holding a
+closure (`.onTapGesture`, `.gesture`) has no key and always rebuilds; its
+*content* is still compared at its own level.
+
+### NavigationStack keeps covered screens
+
+Releasing departed views promptly exposed that `NavigationStack` built only
+the top screen (§8), so the root left the tree on every push and its state
+was gone on the way back — the counter reset, faders reset. That had been
+hidden by the old sweep. Fixed the way SwiftUI does it: every screen stays in
+the tree, and the covered ones are `._parked(true)` — zero size, never
+placed, skipped by hit testing (the frames they carry are from when they were
+last visible), their shader slots released. `@State` and scroll offsets are
+still there on Back.
+
+### Numbers
+
+Debug build, same demo as §6:
+
+```
+                     before                     after
++ press              scoped(1)  1.3ms built=8   scoped(1)  1.1ms built=4  reused=1
+fader drag           fallback   5.1ms built=209 scoped(3)  3.2ms built=29 reused=21
+scroll wheel         (subtree rebuilt)          scoped(1)  1.1ms built=3  reused=7
+window resize        full      ~10ms built=209  full       1.9ms built=1  reused=2
+first build          full      10.2ms built=209 full      13.7ms built=234
+```
+
+The fader drag no longer rebuilds the tree from the root; the 29 nodes it
+does build are the owner's body, the button row (closures), and the one row
+whose binding chain the write reached. A resize re-lays-out everything and
+rebuilds nothing. The first build pays ~30% more for the bookkeeping (an
+entry with two closures per view); that is the trade.
+
+### Honest limits
+
+* Views holding closures — `Button`, `NavigationLink`, `ForEach`, `AnyView`
+  — never compare equal, so a parent that re-runs always rebuilds *them*;
+  their children still compare at their own level. `ForEach` rebuilding its
+  own node while reusing every row is the common case and is cheap.
+* `_viewID` is the call site only through the generated init. A view with
+  its own init — every `@ViewBuilder`-taking one — gets the declaration site
+  unless it takes and assigns `_viewID` itself.
+* The generated init follows memberwise rules as far as syntax allows; a
+  property without a type annotation is not a parameter.
+* A covered navigation screen is built (cheaply, mostly reused) on every
+  stack rebuild, and its shader pipelines are recompiled on the way back.
+
+## 17. `@View` as the foundation, not an add-on
+
+Pushback on §16: the sketch wanted the macro to be the general mechanism, and
+the core was still written against plain `View` with reflection, with
+`IdentifiedView` bolted on through `as?` casts. Reworked so the three
+generated members are requirements of `View` itself:
+
+```swift
+protocol View: ViewInput {
+    var body: Body { get }
+    var _viewID: ViewID { get set }                    // @View: stored
+    func _bindDynamicProperties(_: DynamicPropertyBinder) // @View: static list
+    func _isEquivalent(to: Self) -> Bool               // @View: field-by-field
+}
+```
+
+A plain `struct S: View` gets protocol-extension defaults that do the same
+job through reflection; `@View` generates cheap witnesses. The builder calls
+the requirements directly — no casts, no fast/slow branches, and the last
+`Mirror` on the build path for a `@View` view is gone.
+
+Two things the macro can do that nothing at runtime could:
+
+* **The call site, for every view expression.** Not from the init — a
+  hand-written init has no location parameter and a macro cannot add one to
+  it — but from `ViewBuilder.buildExpression`, whose implicit call sits on
+  the expression, so its `#line` default *is* the line the view was written
+  on. Measured with a probe: it works, and a modifier chain forwards the
+  stamp inward, so `Row().padding()` identifies `Row`. Both `buildExpression`
+  overloads take the location so neither is preferred for using fewer
+  defaults. `_viewID` is settable for this reason.
+* **A warning at the declaration** for a stored closure: two values holding
+  one are never equivalent, so the view is rebuilt whenever its parent is.
+  That used to be discoverable only from the `=2` perf trace.
+
+Deviation accepted knowingly: SwiftUI has no `_viewID` and identifies by
+type and position only. Here a `flag ? Row("a") : Row("b")` at one position
+is two views.
+
+### Last reflection off the build path
+
+`StateKey.viewType` was a `String(reflecting: V.self)` — a slow call, cached
+per type, and only ever *compared*. It is now `ObjectIdentifier(V.self)`:
+distinct generic instantiations are distinct metatypes, so it tells exactly
+the same views apart, for every view rather than only `@View` ones, and the
+macro turned out not to be needed for this one. The `onAppear` key, which
+borrowed the field for a string tag, uses a private marker type instead.
+With that, a build of a `@View` tree does no reflection at all: identity,
+binding and comparison are all compile-time products.
+
+### Hit testing ignored clipping — exposed by scroll offsets that survive
+
+Reported as "Back loops between the shader and the gallery". Reproduced
+only with the gallery *scrolled* before opening a shader: after Back, the
+second Back hit a gallery row at `y = -53` — scrolled up under the
+navigation bar — and pushed the shader again. Hit testing walked every
+child by its placed frame and never asked whether a `ScrollView` or
+`.clipped()` had cut it off; screens are tested before the bar (last drawn,
+first hit), so the hidden row won.
+
+The bug is old. It was masked because a push used to throw the gallery away
+and a pop rebuilt it at offset 0; §17's parked screens keep the offset, and
+so keep the row under the bar. `NodeContent.clipsChildren` (true for
+`ScrollContent` and `ClipContent`) now stops the walk at a clipping node's
+frame. Verified with the scrolled flow at both stack depths, and on the
+main screen with the mixer scrolled beneath its buttons.
+
+Lesson for the test script: one push and one pop is not a navigation test.
+Scroll first, go two deep, come all the way back.
+
+### Resizing a shader view freed its image mid-frame
+
+Reported as a crash on maximizing the window with a shader on screen and
+pressing Back. The crash report put it in MoltenVK's draw encoding during
+`vkQueueSubmit`, and it happened on the resize itself, before Back:
+`ShaderSlotRegistry.use` saw the view's pixel size change and called
+`destroy(existing)` right there — the image and pipeline freed while the
+frames in flight still referenced them, and the old container left in
+`engine.nodes` for the composite pass to sample from freed memory. The
+teardown path had been made safe in §8 (detach now, free at the top of the
+next frame, behind a drain); the resize path was the same bug, never
+touched.
+
+Both now go through one `retire(_:)`. The new slot inherits the old one's
+clock, so the animation carries on across a resize instead of restarting.
+Verified: shader on screen → maximize → shrink → maximize → Back → Back; the
+gallery (eight live slots) resized three times, a row opened, resized,
+Back → Back. No crash report.
+
+## 18. Building from GitHub, not just from the siblings
+
+`Package.swift` now decides where the three Nucleant packages come from:
+`NUCLEANT_LOCAL_DEV=1|0` in the environment if set, otherwise *local when the
+sibling checkout exists next to this package* — true in this development
+tree, false in a clone SwiftPM makes under `.build/checkouts`. The upstream
+packages (NucleantVulkan, NucleantThorVG, NucleantApplication) make the same
+decision the same way, which is what makes the chain resolvable from git at
+all: a package fetched by revision may not have path dependencies, and each
+of them had its switch hardcoded to local on master.
+
+Found on the way: SulphurGeometry's default branch is `main`, not the
+`master` NucleantVulkan asked for; and the `android` → `master` merge of
+NucleantApplication had duplicated the `env` block in its manifest, so master
+did not evaluate. Both fixed on master.
+
+Verified with `.build` and `Package.resolved` deleted and
+`NUCLEANT_LOCAL_DEV=0 swift build`: the chain resolves to `master` of all
+three (plus SulphurGeometry `main`), the framework binaries come along in
+the clones, and the demo runs through the full interaction set. The tree is
+back on local mode afterwards — a plain `swift build` here uses the siblings.
