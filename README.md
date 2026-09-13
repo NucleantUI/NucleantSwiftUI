@@ -250,14 +250,47 @@ Shader views are clipped by their containers (a shader in a `ScrollView`
 is cut off at its edge) but always composite as a rectangle —
 `.cornerRadius` does not round them.
 
+### A view as the shader's input
+
+`.shader(_:)` goes the other way: the view it is applied to is drawn into a
+texture, and the shader reads that texture and writes what appears in its
+place — SwiftUI's `layerEffect`. The view still lays out, still takes
+input, still keeps its state; only its pixels change.
+
+```swift
+mixerPanel
+    .cornerRadius(14)                       // clip inside the effect, so the
+    .shader(ShaderLibrary.crt)              // rounding is in the texture
+
+card.shader(ShaderLibrary.wave, isEnabled: effectsOn)   // toggled without rebuilding `card`
+
+Text("Hello").shader(source: """
+    fragColor = layer(uv + vec2(sin(uv.y * 30.0 + time * 3.0) * 0.01, 0.0));
+""")
+```
+
+In the body, `layer(uv)` is the view's pixel under the current one — so
+`fragColor = layer(uv);` is the identity — and `uContent` is the `sampler2D`
+behind it, stored y-up like everything else in shader space. It is also
+`iChannel0`, so a ShaderToy post-processing shader that reads
+`texture(iChannel0, uv)` drops in through `ShaderFunction(shaderToy:)`
+unchanged. `ShaderLibrary.effects` has eight to start from: identity, CRT,
+wave, pixelate, chromatic aberration, blur, ripple, and a ShaderToy-form
+one.
+
+A shader whose source never reads the clock or the pointer is dispatched
+once, and again only when the view under it repaints; one that does runs
+every frame. Effects do not nest — a `Shader` view or a second `.shader`
+inside one is composited over the effect's output, not through it.
+
 ## Seeing what the framework does
 
 Set these in the environment when running:
 
 | Variable | Prints |
 | --- | --- |
-| `NUCLEANT_SWIFTUI_TRACE_PERF=1` | per rebuild: kind, time, nodes built / reused, cache misses |
-| `NUCLEANT_SWIFTUI_TRACE_PERF=2` | …plus every view built or reused, with the reason it was not reused |
+| `NUCLEANT_SWIFTUI_TRACE_PERF=1` | per rebuild: kind, time, nodes built / reused, cache misses, `.shader` canvases redrawn |
+| `NUCLEANT_SWIFTUI_TRACE_PERF=2` | …plus every view built or reused, with the reason it was not reused, and each shader slot built with its cost |
 | `NUCLEANT_SWIFTUI_TRACE_INPUT=1` | hit testing — what each press landed on |
 | `NUCLEANT_SWIFTUI_TRACE_LAYOUT=1` | the placed display list, rect by rect |
 

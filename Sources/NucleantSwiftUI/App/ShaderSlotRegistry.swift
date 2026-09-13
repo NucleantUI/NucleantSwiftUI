@@ -12,10 +12,17 @@
 //  when it goes away. This registry is that bookkeeping, and the one place in
 //  the framework where the view layer reaches the engine directly.
 //
+//  A `.shader(_:)` effect is the same slot with one more piece: a ThorVG
+//  canvas of its own that the view is drawn into, bound to the compute
+//  shader as a texture. Two engine nodes, then — the canvas, which is never
+//  composited, and the effect's output, which is — updated in that order.
+//
 
 import CVulkan
 import VulkanCore
 import NucleantVulkan
+import NucleantThorVG
+import Dispatch
 
 @MainActor
 final class ShaderSlotRegistry {
@@ -25,11 +32,18 @@ final class ShaderSlotRegistry {
         let node: OGLShaderNode<NucleantRenderNode>
         let container: NucleantRenderNode
         let pipeline: ShaderPipeline
+        /// For a `.shader(_:)` effect: the canvas the view is drawn into,
+        /// which the shader samples. `nil` for a generative `Shader` view —
+        /// and for a retired effect slot whose canvas has been handed on.
+        var layer: Layer?
         /// Pixel size the node was built at — a resize rebuilds it.
         var width: Int
         var height: Int
         /// Source it was compiled from; a change recompiles.
         var source: String
+        /// Whether the source reads the clock or the pointer. If not, one
+        /// dispatch is all it needs until its input changes.
+        let isAnimated: Bool
         /// Seen during the current layout pass. Anything not seen has left
         /// the tree and is torn down.
         var used = true
@@ -37,21 +51,55 @@ final class ShaderSlotRegistry {
         var elapsed: Double = 0
         /// Frames drawn since it appeared — ShaderToy's `iFrame`.
         var frame: Int = 0
+        /// Where the view was last placed, in points — the pointer uniform
+        /// is relative to it.
+        var rect: Rect = .zero
+        /// `rect`'s origin snapped to a whole pixel, in points: where the
+        /// image is actually composited, and so where a layer's content is
+        /// drawn from, so that texels land on pixels rather than between
+        /// them (a fractional origin bilinearly blurs the whole layer).
+        var pixelOrigin: Point = .zero
 
         init(
             node: OGLShaderNode<NucleantRenderNode>,
             container: NucleantRenderNode,
             pipeline: ShaderPipeline,
+            layer: Layer?,
             width: Int,
             height: Int,
-            source: String
+            function: ShaderFunction
         ) {
             self.node = node
             self.container = container
             self.pipeline = pipeline
+            self.layer = layer
             self.width = width
             self.height = height
-            self.source = source
+            self.source = function.source
+            self.isAnimated = function.isAnimated
+        }
+    }
+
+    /// The view side of a `.shader(_:)` slot: a ThorVG canvas the size of the
+    /// view, rasterized whenever the view draws something different, and
+    /// sampled by the slot's compute shader as `uContent`.
+    final class Layer {
+        let node: ThorShaderNode<NucleantRenderNode>
+        let container: NucleantRenderNode
+        let renderer: ThorDisplayRenderer
+        /// What the canvas currently holds, and where the view was when it
+        /// was drawn — an identical list at the same place is not drawn again.
+        var content: DisplayList?
+        var origin: Point = .zero
+
+        init(
+            node: ThorShaderNode<NucleantRenderNode>,
+            container: NucleantRenderNode,
+            renderer: ThorDisplayRenderer
+        ) {
+            self.node = node
+            self.container = container
+            self.renderer = renderer
         }
     }
 
@@ -68,6 +116,15 @@ final class ShaderSlotRegistry {
     /// Slots detached from the engine but not yet freed — see `endPass`.
     private var pendingDestroy: [Slot] = []
 
+    /// Canvases from retired `.shader` slots, kept for the next one to
+    /// appear. A ThorVG GPU canvas costs ~60ms to bring up (its renderer
+    /// compiles pipelines the first time it is given a target) and under a
+    /// millisecond to retarget, so a canvas is never thrown away while a
+    /// spare might be wanted: scrolling a gallery of effects in and out of
+    /// view, or resizing a window, reuses these.
+    private var spareLayers: [Layer] = []
+    private let spareLayerLimit = 8
+
     init(engine: NucleantRenderEngine) {
         self.engine = engine
     }
@@ -81,11 +138,38 @@ final class ShaderSlotRegistry {
     /// Called from `ShaderContent.place`: make sure a slot exists for this
     /// view, at this size, and put it at this rect.
     func use(path: [Int], function: ShaderFunction, rect: Rect, clip: Rect?) {
+        _ = slot(at: path, function: function, rect: rect, clip: clip, withLayer: false)
+    }
+
+    /// Called from `ShaderEffectContent.place`: the slot for this view with
+    /// `content` — what the view drew this pass — in its canvas.
+    func useLayer(path: [Int], function: ShaderFunction, rect: Rect, clip: Rect?, content: DisplayList) {
+        guard let slot = slot(at: path, function: function, rect: rect, clip: clip, withLayer: true),
+              let layer = slot.layer
+        else { return }
+        // Absolute coordinates, so a view that merely moved reads as changed
+        // and is drawn again at its new place; the canvas transform absorbs
+        // the origin, but the comparison does not.
+        guard layer.content != content || layer.origin != slot.pixelOrigin else { return }
+        PerfTrace.layersDrawn += 1
+        layer.renderer.render(content, origin: slot.pixelOrigin, flipHeight: slot.height)
+        layer.content = content
+        layer.origin = slot.pixelOrigin
+        // Rasterize the canvas, then resample it — whether or not the shader
+        // itself is animated.
+        layer.container.needsRender = true
+        slot.container.needsRender = true
+    }
+
+    /// The slot standing at `path`, rebuilt if its size or source changed,
+    /// created if there is none; placed at `rect` either way.
+    private func slot(at path: [Int], function: ShaderFunction, rect: Rect, clip: Rect?, withLayer: Bool) -> Slot? {
         let source = function.source
         let pixelWidth = max(1, Int((rect.width * scale).rounded()))
         let pixelHeight = max(1, Int((rect.height * scale).rounded()))
 
         var previous: Slot?
+        var canvas: Layer?
         if let existing = slots[path] {
             existing.used = true
             // Both rects are read fresh by the engine every frame, so moving or
@@ -94,8 +178,9 @@ final class ShaderSlotRegistry {
             place(existing, rect: rect, clip: clip)
             if existing.width == pixelWidth,
                existing.height == pixelHeight,
-               existing.source == source {
-                return
+               existing.source == source,
+               (existing.layer != nil) == withLayer {
+                return existing
             }
             // Retire it the way `endPass` does — detach now, free at the top
             // of the next frame. Freeing here, mid-frame, is the same
@@ -104,7 +189,15 @@ final class ShaderSlotRegistry {
             // in `engine.nodes` for the composite pass to draw from freed
             // memory. Seen as a segfault inside MoltenVK on maximizing a
             // window with a shader on screen.
+            //
+            // Its canvas, though, is handed straight to the replacement: the
+            // retargeting is in place, and the spare pool is only refilled
+            // once the old GPU objects are freed, a frame from now.
             retire(existing)
+            if withLayer {
+                canvas = existing.layer
+                existing.layer = nil
+            }
             slots[path] = nil
             previous = existing
         }
@@ -112,9 +205,10 @@ final class ShaderSlotRegistry {
         guard let slot = makeSlot(
             function: function,
             width: pixelWidth,
-            height: pixelHeight
+            height: pixelHeight,
+            layer: withLayer ? .reuse(canvas) : .none
         ) else {
-            return
+            return nil
         }
         // Same view, new image: the animation continues rather than restarts.
         if let previous {
@@ -123,14 +217,22 @@ final class ShaderSlotRegistry {
         }
         place(slot, rect: rect, clip: clip)
         slots[path] = slot
+        return slot
     }
 
     /// Point a slot at its frame, and at whatever its container allows it to
     /// draw within.
     private func place(_ slot: Slot, rect: Rect, clip: Rect?) {
+        slot.rect = rect
+        // Whole pixels, at the image's own size: a viewport that starts or
+        // ends between pixels resamples the image, and a 1:1 mapping is what
+        // keeps a layer's text as sharp as it was in the canvas.
+        let x = (rect.minX * scale).rounded(.down)
+        let y = (rect.minY * scale).rounded(.down)
+        slot.pixelOrigin = Point(x: x / scale, y: y / scale)
         slot.container.compositeRect = SIMD4(
-            rect.minX * scale, rect.minY * scale,
-            rect.width * scale, rect.height * scale
+            x, y,
+            Double(slot.width), Double(slot.height)
         )
         // Intersected here rather than in the engine: `clip` is the container's
         // rect, and what the slot may draw is the part of *its own* frame that
@@ -163,9 +265,15 @@ final class ShaderSlotRegistry {
     /// all that has to happen *now*), and the GPU objects are released at the
     /// top of the next frame, outside any recording.
     func endPass() {
+        let started = PerfTrace.isVerbose ? DispatchTime.now().uptimeNanoseconds : 0
+        var retired = 0
         for (path, slot) in slots where !slot.used {
             retire(slot)
             slots[path] = nil
+            retired += 1
+        }
+        if retired > 0 {
+            PerfTrace.trace("shader slots: retired \(retired) in \(PerfTrace.millis(since: started))")
         }
     }
 
@@ -174,20 +282,24 @@ final class ShaderSlotRegistry {
     /// and readable marker — `remove(id:)` would do this too, but it also
     /// frees the node, which is exactly what is being deferred.
     private func retire(_ slot: Slot) {
-        engine.nodes.removeAll { $0.id == slot.container.id }
-        engine.invalidateComposite(id: slot.container.id)
+        let ids = [slot.container.id, slot.layer?.container.id].compactMap { $0 }
+        engine.nodes.removeAll { ids.contains($0.id) }
+        for id in ids { engine.invalidateComposite(id: id) }
         pendingDestroy.append(slot)
     }
 
     // MARK: - Per frame
 
     /// Advance every live shader's clock and hand it to the GPU, then flag the
-    /// slots for redraw.
+    /// animated slots for redraw.
     ///
-    /// Shaders are animated by definition, so unlike the ThorVG canvas these
-    /// slots *do* want a dispatch every frame — that is the one thing on screen
-    /// which is never idle. Returns true when there is at least one, so the
-    /// window knows the frame was not free.
+    /// A shader that reads the clock or the pointer wants a dispatch every
+    /// frame — unlike the ThorVG canvas, that is the one thing on screen which
+    /// is never idle. One that reads neither is left alone: its first dispatch
+    /// (the slot starts `needsRender`) produced everything it will ever
+    /// produce, until a `.shader` layer's content changes and `useLayer`
+    /// re-arms it. Returns true when at least one slot is live, so the window
+    /// knows the frame was not free.
     @discardableResult
     func tick(_ delta: Double, pointer: Point) -> Bool {
         releasePending()
@@ -195,20 +307,28 @@ final class ShaderSlotRegistry {
         for slot in slots.values {
             slot.elapsed += delta
             slot.frame += 1
+            // The pointer in the view's own pixels, the space `resolution`
+            // describes — ShaderToy's `iMouse` contract.
+            let local = Point(
+                x: (pointer.x - slot.rect.minX) * scale,
+                y: (pointer.y - slot.rect.minY) * scale
+            )
             slot.pipeline.update(ShaderUniforms(
                 time: Float(slot.elapsed),
                 timeDelta: Float(delta),
                 frame: Float(slot.frame),
                 resolutionX: Float(slot.width),
                 resolutionY: Float(slot.height),
-                mouseX: Float(pointer.x * scale),
-                mouseY: Float(pointer.y * scale),
+                mouseX: Float(local.x),
+                mouseY: Float(local.y),
                 // zw is ShaderToy's "position while pressed"; there is no
                 // press tracking on this path yet, so it mirrors xy.
-                mouseClickX: Float(pointer.x * scale),
-                mouseClickY: Float(pointer.y * scale)
+                mouseClickX: Float(local.x),
+                mouseClickY: Float(local.y)
             ))
-            slot.container.needsRender = true
+            if slot.isAnimated {
+                slot.container.needsRender = true
+            }
         }
         return true
     }
@@ -219,6 +339,9 @@ final class ShaderSlotRegistry {
         }
         slots.removeAll()
         releasePending()
+        vkDeviceWaitIdle(engine.device)
+        for layer in spareLayers { destroy(layer) }
+        spareLayers.removeAll()
     }
 
     /// Free everything retired by a previous pass. Called at the top of a
@@ -235,7 +358,32 @@ final class ShaderSlotRegistry {
 
     // MARK: - Building
 
-    private func makeSlot(function: ShaderFunction, width: Int, height: Int) -> Slot? {
+    /// Whether a slot gets a canvas, and if so which one to start from.
+    private enum LayerRequest {
+        case none
+        /// A canvas to retarget if given, a spare or a fresh one otherwise.
+        case reuse(Layer?)
+    }
+
+    private func makeSlot(function: ShaderFunction, width: Int, height: Int, layer request: LayerRequest) -> Slot? {
+        let started = PerfTrace.isVerbose ? DispatchTime.now().uptimeNanoseconds : 0
+        let layer: Layer?
+        let withLayer: Bool
+        switch request {
+        case .none:
+            layer = nil
+            withLayer = false
+        case .reuse(let handed):
+            guard let made = makeLayer(width: width, height: height, reusing: handed) else { return nil }
+            layer = made
+            withLayer = true
+        }
+        let canvasReady = PerfTrace.isVerbose ? DispatchTime.now().uptimeNanoseconds : 0
+        defer {
+            PerfTrace.trace("shader slot \(width)x\(height)\(withLayer ? " +layer" : ""): "
+                + "\(PerfTrace.millis(since: started))"
+                + (withLayer ? " (canvas \(PerfTrace.millis(from: started, to: canvasReady)))" : ""))
+        }
         do {
             let image = try makeStorageImage(width: width, height: height)
             let node = OGLShaderNode<NucleantRenderNode>(
@@ -246,12 +394,19 @@ final class ShaderSlotRegistry {
                 memory: image.memory,
                 storageCapable: true
             )
+            if let layer {
+                // Borrowed, as the node's contract says: the layer's node
+                // owns the image and frees it.
+                node.register(image: layer.node.image, imageView: layer.node.imageView)
+            }
             let pipeline = try ShaderPipeline(
                 engine: engine,
                 imageView: image.view,
+                input: layer?.node.imageView,
                 source: ShaderSource.compute(
                     functions: function.functions,
-                    body: function.body
+                    body: function.body,
+                    samplesContent: layer != nil
                 )
             )
             node.computePipeline = pipeline.pipeline
@@ -264,20 +419,65 @@ final class ShaderSlotRegistry {
                 context: .shader(node)
             )
             container.observeContext()
+            // After the layer's canvas node, so the engine draws the canvas
+            // before the shader samples it.
             engine.append(container)
 
             return Slot(
                 node: node,
                 container: container,
                 pipeline: pipeline,
+                layer: layer,
                 width: width,
                 height: height,
-                source: function.source
+                function: function
             )
         } catch {
             fputs("NucleantSwiftUI: shader node build (\(width)x\(height)) failed: \(error)\n", stderr)
+            if let layer {
+                engine.nodes.removeAll { $0.id == layer.container.id }
+                recycle(layer)
+            }
             return nil
         }
+    }
+
+    /// The canvas half of a `.shader` slot: a ThorVG node the size of the
+    /// view, in the engine's list so it is drawn each frame its content
+    /// changed, but never composited — `compositesToWindow` is what keeps its
+    /// image off the swapchain and its size off the window's.
+    ///
+    /// `reusing` (or a spare) is retargeted in place rather than rebuilt: the
+    /// canvas keeps its renderer, gets a new image at the new size, and its
+    /// slot keeps its identity in the engine.
+    private func makeLayer(width: Int, height: Int, reusing handed: Layer?) -> Layer? {
+        if let layer = handed ?? spareLayers.popLast() {
+            if engine.resizeThorNode(layer.node, id: layer.container.id, width: width, height: height) {
+                layer.content = nil
+                layer.renderer.scale = scale
+                layer.container.needsRender = true
+                engine.append(layer.container)
+                return layer
+            }
+            // Left at its old size, which is no use here — replace it.
+            destroy(layer)
+        }
+        guard let node = engine.makeThorWidgetNode(width: width, height: height) else {
+            fflush(stdout)
+            fputs("NucleantSwiftUI: layer canvas build (\(width)x\(height)) failed\n", stderr)
+            return nil
+        }
+        let container = NucleantRenderNode(
+            id: Int.random(in: Int.min...Int.max),
+            context: .thor(node)
+        )
+        container.compositesToWindow = false
+        container.observeContext()
+        engine.append(container)
+
+        let renderer = ThorDisplayRenderer(canvas: node.canvas.base)
+        renderer.scale = scale
+        return Layer(node: node, container: container, renderer: renderer)
     }
 
     /// Free one retired slot. The caller has already detached it from the
@@ -294,6 +494,29 @@ final class ShaderSlotRegistry {
         slot.node.computeDescriptorSet = nil
         slot.pipeline.destroy()
         slot.node.destroyResources(engine)
+        if let layer = slot.layer {
+            recycle(layer)
+        }
+    }
+
+    /// Keep a canvas that is no longer in use for the next `.shader` slot,
+    /// emptied of its paints; past the limit it is freed.
+    private func recycle(_ layer: Layer) {
+        guard spareLayers.count < spareLayerLimit else {
+            destroy(layer)
+            return
+        }
+        _ = tvg_canvas_remove(layer.node.canvas.base, nil)
+        layer.content = nil
+        spareLayers.append(layer)
+    }
+
+    /// The canvas first: ThorVG holds its own reference to the wgpu texture
+    /// behind the node's image for as long as it is the canvas's target, and
+    /// the node's teardown releases that texture last.
+    private func destroy(_ layer: Layer) {
+        _ = tvg_canvas_destroy(layer.node.canvas.base)
+        layer.node.destroyResources(engine)
     }
 
     /// The image the compute shader writes and the composite samples.

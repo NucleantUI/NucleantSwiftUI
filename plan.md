@@ -27,8 +27,11 @@ NucleantApp (@main)
       └ HostingWindow : NucleantWindow, WindowBaseDelegate     <- App/
           ├ PlatformWindow<HostingWindow>   (NucleantApplication)
           ├ VulkanRenderEngine<NucleantRenderNode>  (NucleantVulkan)
-          └ one window-filling ThorShaderNode  (NucleantThorVG)
-                ↑ display list replayed onto its Tvg_Canvas
+          ├ one window-filling ThorShaderNode  (NucleantThorVG)
+          │     ↑ display list replayed onto its Tvg_Canvas
+          ├ per `Shader` view: an OGLShaderNode composited into its rect
+          └ per `.shader(_:)` effect: a ThorShaderNode the view is drawn into
+                (never composited) + an OGLShaderNode that samples it
                 │
         ViewNode tree  ──sizeThatFits/place──▶  DisplayList
                 ↑
@@ -77,6 +80,11 @@ replays as `Tvg_Paint`s. Rebuild happens on invalidation, not per frame.
 - [x] `ShaderFunction(shaderToy:)` — paste an unmodified `mainImage` shader;
       `iTime`/`iTimeDelta`/`iFrame`/`iResolution`/`iMouse` in ShaderToy's types,
       and shader space is y-up (origin bottom-left) as ShaderToy defines it
+- [x] `.shader(_:isEnabled:)` — any view as a shader's texture input: the
+      view is drawn into a canvas of its own (`layer(uv)`, `uContent`,
+      ShaderToy's `iChannel0`) and the shader's output composites in its
+      place; input, state and layout untouched. `ShaderLibrary.effects` has
+      eight. Static shaders dispatch once; canvases are pooled (§19)
 
 ## Phase 6 — modifiers
 - [x] `.frame`, `.padding`, `.background`, `.overlay`, `.border`
@@ -113,6 +121,10 @@ replays as `Tvg_Paint`s. Rebuild happens on invalidation, not per frame.
 - `Shaders` opens a gallery whose three rows each carry a live shader — three
   GPU nodes at once — and pushing a row opens it full screen; `Back` tears the
   slots down without crashing
+- `Effects` opens a gallery of eight `.shader` effects over one card, each a
+  canvas of its own; a row opens the mixer under that effect, still
+  interactive (fader drag, `+`), with the effect toggled off and on, the
+  window resized and maximized, then `Back`, `Back`
 
 See [PROCESS.md](PROCESS.md) §4, §7, §8.
 
@@ -147,8 +159,9 @@ scoped(3)    3.2ms  built=29  reused=21    fader drag — state on the *root* vi
 full         1.9ms  built=1   reused=2     window resize
 ```
 
-Traces: `NUCLEANT_SWIFTUI_TRACE_PERF=1` (rebuild kind, timing, cache misses;
-`=2` also names every view built or reused and why),
+Traces: `NUCLEANT_SWIFTUI_TRACE_PERF=1` (rebuild kind, timing, cache misses,
+`.shader` canvases redrawn; `=2` also names every view built or reused and
+why, and each shader slot built with its cost),
 `NUCLEANT_SWIFTUI_TRACE_INPUT=1` (hit testing),
 `NUCLEANT_SWIFTUI_TRACE_LAYOUT=1` (the placed display list).
 [PROCESS.md](PROCESS.md) §5–7, §16.
@@ -170,6 +183,12 @@ Traces: `NUCLEANT_SWIFTUI_TRACE_PERF=1` (rebuild kind, timing, cache misses;
   canvas, so `.cornerRadius` on a `Shader` has no effect and it always
   composites as a rectangle. Container clipping *does* reach it — a shader in a
   `ScrollView` is cropped at the edge — via the slot's `compositeScissor`.
+- A `.shader(_:)` effect composites as a rectangle too, so clip *inside* it
+  (`.cornerRadius(10).shader(fx)`) — the rounding then lands in the texture.
+  Effects do not nest: a `Shader` view or another `.shader` inside one is a
+  slot of its own, composited over the effect's output rather than through
+  it. The canvas is the view's full size, so keep effects on what is on
+  screen rather than on a long scroll content.
 - `NavigationStack` takes the root title as an argument and a pushed screen's
   title from its `NavigationLink` — there is no preference system, so a child
   cannot hand `.navigationTitle` up to an ancestor.
@@ -185,8 +204,9 @@ Traces: `NUCLEANT_SWIFTUI_TRACE_PERF=1` (rebuild kind, timing, cache misses;
 - [ ] Animation + transitions
 - [ ] `List`, `TabView`
 - [ ] Text input / focus
-- [ ] Post-process shaders over the canvas (the `CanvasShader` path), as
-      distinct from the generative `Shader` view
+- [x] Post-process shaders over a view (`.shader(_:)`, the `CanvasShader`
+      path) — see §19; still open: a whole-window post pass, which is the
+      same thing applied to the root
 - [ ] `GeometryReader` (needs building a child during layout, not before it)
 - [ ] Per-command dirty-region diffing instead of clear-and-re-add
 - [ ] iOS run (the code is `#if`-gated and compiles; only macOS was run)

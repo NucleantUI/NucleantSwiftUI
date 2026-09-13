@@ -173,6 +173,133 @@ struct ShaderGalleryScreen {
     }
 }
 
+// MARK: - Effects
+//
+// The other direction: a view as the shader's *input*. Every row below draws
+// the same small card into a canvas of its own and runs one of the library's
+// effects over it — text, rounded corners and alpha all go through the
+// texture. The screen behind a row is the mixer under that effect, still
+// fully interactive.
+
+struct EffectEntry: Identifiable {
+    let id: Int
+    let name: String
+    let blurb: String
+    let function: ShaderFunction
+}
+
+@MainActor
+let effectGallery: [EffectEntry] = ShaderLibrary.effects.enumerated().map { index, entry in
+    EffectEntry(id: index, name: entry.name, blurb: entry.blurb, function: entry.function)
+}
+
+/// The view every effect row is applied to.
+@View
+struct EffectPreviewCard {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Nucleant")
+                .font(.system(size: 16, weight: .semibold))
+            HStack(spacing: 8) {
+                Circle().fill(Palette.accent).frame(width: 12, height: 12)
+                Capsule().fill(Palette.good).frame(width: 64, height: 8)
+                Capsule().fill(Palette.warn).frame(width: 32, height: 8)
+            }
+            Text("the view as a texture")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+        }
+        .padding(12)
+        .frame(width: 200, height: 92, alignment: .leading)
+        .background(Palette.panel)
+        .cornerRadius(10)
+    }
+}
+
+@View
+struct EffectsScreen {
+    var body: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("\(effectGallery.count) effects over the same card — each row is its own canvas, sampled by its own shader.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+
+                ForEach(effectGallery) { entry in
+                    NavigationLink(title: entry.name) {
+                        EffectScreen(entry: entry)
+                    } label: {
+                        HStack(spacing: 14) {
+                            EffectPreviewCard()
+                                .shader(entry.function)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.name)
+                                    .font(.system(size: 16, weight: .medium))
+                                Text(entry.blurb)
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Spacer()
+
+                            Text("›")
+                                .font(.system(size: 20))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(horizontal: 14, vertical: 10)
+                        .background(Palette.panelHighlight)
+                        .cornerRadius(12)
+                    }
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
+/// The mixer under one effect. The faders and the counter keep working: the
+/// effect changes what is drawn, not what is there.
+@View
+struct EffectScreen {
+    let entry: EffectEntry
+    @State private var isEnabled = true
+    @State private var tracks = Array(defaultTracks.prefix(4))
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text(entry.blurb)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button(isEnabled ? "Effect on" : "Effect off") { isEnabled.toggle() }
+                    .tint(isEnabled ? Palette.accent : Color(white: 0.3))
+            }
+
+            VStack(spacing: 8) {
+                Counter()
+                ForEach(tracks.indices, id: \.self) { index in
+                    TrackRow(
+                        name: tracks[index].name,
+                        color: tracks[index].color,
+                        level: $tracks[index].level
+                    )
+                }
+            }
+            .padding(16)
+            .background(Palette.panel)
+            .cornerRadius(14)
+            .shader(entry.function, isEnabled: isEnabled)
+
+            Spacer()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
 @View
 struct AboutScreen {
     var body: some View {
@@ -224,6 +351,8 @@ struct ContentView {
                     .tint(Color(white: 0.3))
 
                 NavigationLink("Shaders") { ShaderGalleryScreen() }
+
+                NavigationLink("Effects") { EffectsScreen() }
 
                 NavigationLink("About") { AboutScreen() }
 

@@ -115,7 +115,8 @@ public final class ViewHost {
             PerfTrace.log("\(kind) \(String(format: "%.1f", elapsed))ms "
                 + "(build \(String(format: "%.1f", building))ms) "
                 + "built=\(PerfTrace.nodesBuilt) reused=\(PerfTrace.nodesReused) "
-                + "measured=\(PerfTrace.sizeCalls) text=\(PerfTrace.textMeasures)")
+                + "measured=\(PerfTrace.sizeCalls) text=\(PerfTrace.textMeasures)"
+                + (PerfTrace.layersDrawn > 0 ? " layers=\(PerfTrace.layersDrawn)" : ""))
         }
 
         // Deferred to here so an `onAppear` body can read the state it was
@@ -369,9 +370,10 @@ enum InputTrace {
 ///
 /// The counters are cache *misses*, not calls: `built` is how many nodes were
 /// actually constructed, `measured` how many actually had to be sized, `text`
-/// how many strings actually had to be measured. `reused` is the one gain
-/// counter: subtrees grafted in from the previous pass. A rebuild whose miss
-/// numbers climb with every pass means something is defeating a cache.
+/// how many strings actually had to be measured, `layers` how many `.shader`
+/// canvases had to be redrawn. `reused` is the one gain counter: subtrees
+/// grafted in from the previous pass. A rebuild whose miss numbers climb with
+/// every pass means something is defeating a cache.
 @MainActor
 enum PerfTrace {
     static let isEnabled = ProcessInfo.processInfo.environment["NUCLEANT_SWIFTUI_TRACE_PERF"] != nil
@@ -391,16 +393,28 @@ enum PerfTrace {
     /// reused row is one, however many nodes it spared.
     static var nodesReused = 0
     static var sizeCalls = 0
+    /// `.shader` layers whose canvas was drawn again this pass — because the
+    /// view under them drew something different, or moved.
+    static var layersDrawn = 0
 
     static func reset() {
         textMeasures = 0
         nodesBuilt = 0
         nodesReused = 0
         sizeCalls = 0
+        layersDrawn = 0
     }
 
     static func log(_ message: @autoclosure () -> String) {
         guard isEnabled else { return }
         fputs("[perf] \(message())\n", stderr)
+    }
+
+    static func millis(since start: UInt64) -> String {
+        millis(from: start, to: DispatchTime.now().uptimeNanoseconds)
+    }
+
+    static func millis(from start: UInt64, to end: UInt64) -> String {
+        String(format: "%.1fms", Double(end - start) / 1_000_000)
     }
 }

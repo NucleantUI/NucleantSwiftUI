@@ -11,6 +11,7 @@
 //  Descriptor layout matches `VulkanCore.TexGenComputePipeline`:
 //    binding 0 — storage image (the shader's output)
 //    binding 1 — uniform buffer (`ShaderUniforms`)
+//    binding 2 — sampled image (the view's own pixels), for a `.shader` effect
 //  A dedicated one-set pool per shader, for the reason the engine gives every
 //  composite node its own: MoltenVK packing several same-layout sets into one
 //  pool misaligns Metal argument-buffer offsets.
@@ -55,12 +56,27 @@ enum ShaderSource {
     /// complete compute shader. Source that already starts with `#version` is
     /// passed through untouched, so a full compute shader is an escape hatch.
     ///
+    /// With `samplesContent`, the wrapper also declares the view's own pixels
+    /// as `uContent` (and ShaderToy's `iChannel0`), plus `layer(uv)` to read
+    /// them — what a `.shader(_:)` effect is given.
+    ///
     /// Local size 8×8 matches the `(w + 7) / 8` dispatch in
     /// `OGLShaderNode.update` exactly.
-    static func compute(functions: String, body: String) -> String {
+    static func compute(functions: String, body: String, samplesContent: Bool = false) -> String {
         if body.trimmingCharactersInWhitespace().hasPrefix("#version") {
             return body
         }
+        let content = samplesContent ? """
+        // The view this effect is applied to, rendered into its own texture
+        // and stored y-up like everything else in shader space — so
+        // `layer(uv)` is the view's pixel under the current one, and an
+        // unmodified ShaderToy `texture(iChannel0, uv)` reads it upright.
+        layout(binding = 2) uniform sampler2D uContent;
+        #define iChannel0 uContent
+        vec3 iChannelResolution[4];
+
+        vec4 layer(vec2 p) { return texture(uContent, p); }
+        """ : ""
         return """
         #version 450
 
@@ -71,6 +87,7 @@ enum ShaderSource {
             vec4 res;         // xy: resolution
             vec4 mouseInfo;   // xy: position, zw: position while pressed
         } u;
+        \(content)
 
         // Constants every ShaderToy-style body reaches for, so each one does
         // not have to redeclare them.
@@ -115,6 +132,7 @@ enum ShaderSource {
             iFrame      = int(u.timeInfo.z);
             iResolution = vec3(resolution, 1.0);
             iMouse      = vec4(mouse, u.mouseInfo.z, resolution.y - u.mouseInfo.w);
+        \(samplesContent ? "    iChannelResolution[0] = iResolution;" : "")
 
             // Shader space is y-up, with (0, 0) at the bottom-left — the
             // convention every ShaderToy shader is written against. The image
@@ -165,9 +183,21 @@ final class ShaderPipeline {
     private var shaderModule: VkShaderModule?
     private var descriptorPool: VkDescriptorPool?
     private var uniforms: BufferAndMemory
+    /// Only with an `input`: how the shader samples the view's pixels.
+    private var sampler: VkSampler?
+    private let hasInput: Bool
 
-    init(engine: NucleantRenderEngine, imageView: VkImageView, source: String) throws {
+    /// `input` is the image the shader may sample at binding 2 — the canvas a
+    /// `.shader` effect's view is drawn into. Left in `SHADER_READ_ONLY_OPTIMAL`
+    /// by its own node's update, which runs before this pipeline's dispatch.
+    init(
+        engine: NucleantRenderEngine,
+        imageView: VkImageView,
+        input: VkImageView? = nil,
+        source: String
+    ) throws {
         self.device = engine.device
+        self.hasInput = input != nil
         self.uniforms = engine.createBuffer(
             size: MemoryLayout<ShaderUniforms>.stride,
             usage: VkBufferUsageFlags(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT.rawValue)
@@ -188,7 +218,8 @@ final class ShaderPipeline {
             try createPipelineLayout()
             shaderModule = try ShaderModuleLoader.load(device: device, spirv: spirv)
             try createPipeline()
-            try createDescriptorSet(imageView: imageView)
+            if input != nil { try createSampler() }
+            try createDescriptorSet(imageView: imageView, input: input)
         } catch {
             destroy()
             throw error
@@ -214,6 +245,7 @@ final class ShaderPipeline {
         if let shaderModule { vkDestroyShaderModule(device, shaderModule, nil) }
         if let setLayout { vkDestroyDescriptorSetLayout(device, setLayout, nil) }
         if let descriptorPool { vkDestroyDescriptorPool(device, descriptorPool, nil) }
+        if let sampler { vkDestroySampler(device, sampler, nil) }
         uniforms.destroy(device: device)
         pipeline = nil
         pipelineLayout = nil
@@ -221,6 +253,7 @@ final class ShaderPipeline {
         setLayout = nil
         descriptorPool = nil
         descriptorSet = nil
+        sampler = nil
         uniforms = BufferAndMemory()
     }
 
@@ -239,7 +272,15 @@ final class ShaderPipeline {
         uniform.descriptorCount = 1
         uniform.stageFlags = VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT.rawValue)
 
-        let bindings = [output, uniform]
+        var bindings = [output, uniform]
+        if hasInput {
+            var input = VkDescriptorSetLayoutBinding()
+            input.binding = 2
+            input.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            input.descriptorCount = 1
+            input.stageFlags = VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT.rawValue)
+            bindings.append(input)
+        }
         let result = bindings.withUnsafeBufferPointer { buffer -> VkResult in
             var info = VkDescriptorSetLayoutCreateInfo()
             info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
@@ -279,11 +320,29 @@ final class ShaderPipeline {
         guard result == VK_SUCCESS else { throw ShaderError.vulkan("compute pipeline") }
     }
 
-    private func createDescriptorSet(imageView: VkImageView) throws {
-        let sizes = [
+    /// Linear, clamped: a distortion that samples past the edge gets the edge
+    /// pixel rather than a wrapped copy of the far side.
+    private func createSampler() throws {
+        var info = VkSamplerCreateInfo()
+        info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO
+        info.magFilter = VK_FILTER_LINEAR
+        info.minFilter = VK_FILTER_LINEAR
+        info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+        info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+        info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+        guard vkCreateSampler(device, &info, nil, &sampler) == VK_SUCCESS else {
+            throw ShaderError.vulkan("sampler")
+        }
+    }
+
+    private func createDescriptorSet(imageView: VkImageView, input: VkImageView?) throws {
+        var sizes = [
             VkDescriptorPoolSize(type: VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, descriptorCount: 1),
             VkDescriptorPoolSize(type: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, descriptorCount: 1),
         ]
+        if input != nil {
+            sizes.append(VkDescriptorPoolSize(type: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descriptorCount: 1))
+        }
         let poolResult = sizes.withUnsafeBufferPointer { buffer -> VkResult in
             var info = VkDescriptorPoolCreateInfo()
             info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO
@@ -315,26 +374,44 @@ final class ShaderPipeline {
         bufferInfo.offset = 0
         bufferInfo.range = VkDeviceSize(MemoryLayout<ShaderUniforms>.stride)
 
+        // The view's canvas, as its own node leaves it after drawing.
+        var inputInfo = VkDescriptorImageInfo()
+        inputInfo.sampler = sampler
+        inputInfo.imageView = input
+        inputInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+
         withUnsafePointer(to: &imageInfo) { imagePtr in
             withUnsafePointer(to: &bufferInfo) { bufferPtr in
-                var writeImage = VkWriteDescriptorSet()
-                writeImage.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
-                writeImage.dstSet = descriptorSet
-                writeImage.dstBinding = 0
-                writeImage.descriptorCount = 1
-                writeImage.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                writeImage.pImageInfo = imagePtr
+                withUnsafePointer(to: &inputInfo) { inputPtr in
+                    var writeImage = VkWriteDescriptorSet()
+                    writeImage.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
+                    writeImage.dstSet = descriptorSet
+                    writeImage.dstBinding = 0
+                    writeImage.descriptorCount = 1
+                    writeImage.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                    writeImage.pImageInfo = imagePtr
 
-                var writeUniform = VkWriteDescriptorSet()
-                writeUniform.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
-                writeUniform.dstSet = descriptorSet
-                writeUniform.dstBinding = 1
-                writeUniform.descriptorCount = 1
-                writeUniform.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                writeUniform.pBufferInfo = bufferPtr
+                    var writeUniform = VkWriteDescriptorSet()
+                    writeUniform.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
+                    writeUniform.dstSet = descriptorSet
+                    writeUniform.dstBinding = 1
+                    writeUniform.descriptorCount = 1
+                    writeUniform.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                    writeUniform.pBufferInfo = bufferPtr
 
-                var writes = [writeImage, writeUniform]
-                vkUpdateDescriptorSets(device, 2, &writes, 0, nil)
+                    var writes = [writeImage, writeUniform]
+                    if input != nil {
+                        var writeInput = VkWriteDescriptorSet()
+                        writeInput.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
+                        writeInput.dstSet = descriptorSet
+                        writeInput.dstBinding = 2
+                        writeInput.descriptorCount = 1
+                        writeInput.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                        writeInput.pImageInfo = inputPtr
+                        writes.append(writeInput)
+                    }
+                    vkUpdateDescriptorSets(device, UInt32(writes.count), &writes, 0, nil)
+                }
             }
         }
     }

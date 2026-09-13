@@ -32,6 +32,23 @@ public enum ShaderLibrary {
         ]
     }
 
+    /// Effects for `.shader(_:)` — each reads the view it is applied to
+    /// through `layer(uv)` and writes what replaces it. Half of them never
+    /// read the clock, and so are dispatched only when the view repaints.
+    @MainActor
+    public static var effects: [(name: String, blurb: String, function: ShaderFunction)] {
+        [
+            ("Identity", "layer(uv), pixel for pixel", identity),
+            ("CRT", "static — dispatched once", crt),
+            ("Wave", "a moving sine distortion", wave),
+            ("Pixelate", "8-pixel cells, static", pixelate),
+            ("Chromatic", "split around the pointer", chromatic),
+            ("Blur", "13-tap gaussian", blur),
+            ("Ripple", "rings from the centre", ripple),
+            ("ShaderToy post", "mainImage() reads iChannel0", shaderToyPost),
+        ]
+    }
+
     /// Not a port — written in ShaderToy's own form to show that
     /// `ShaderFunction(shaderToy:)` takes a `mainImage` unchanged. Paste any
     /// texture-free ShaderToy shader in exactly this shape and it runs.
@@ -400,4 +417,116 @@ public enum ShaderLibrary {
         fragColor = vec4(col, 1.0);
         """
     )
+
+    // MARK: - Effects
+
+    /// The view unchanged. The one to apply when checking that a layer is
+    /// pixel-exact — text, rounded corners and alpha should all survive.
+    public static let identity = ShaderFunction("""
+        fragColor = layer(uv);
+    """)
+
+    /// Barrel curvature, scanlines and a vignette. Reads neither the clock
+    /// nor the pointer, so once drawn it costs nothing until the view under
+    /// it changes.
+    public static let crt = ShaderFunction("""
+        vec2 p = uv * 2.0 - 1.0;
+        p *= 1.0 + 0.08 * dot(p, p);
+        vec2 curved = p * 0.5 + 0.5;
+        float inside = step(0.0, curved.x) * step(curved.x, 1.0)
+                     * step(0.0, curved.y) * step(curved.y, 1.0);
+
+        vec4 c = layer(curved);
+        float line = 0.85 + 0.15 * sin(curved.y * resolution.y * PI);
+        float vignette = 1.0 - 0.35 * dot(p * 0.8, p * 0.8);
+        c.rgb *= line * vignette;
+        fragColor = vec4(c.rgb, c.a * inside);
+    """)
+
+    /// A sine wave running down the view, moving with time.
+    public static let wave = ShaderFunction("""
+        float dx = sin(uv.y * 30.0 + time * 3.0) * 0.012;
+        float dy = cos(uv.x * 20.0 + time * 2.0) * 0.006;
+        fragColor = layer(uv + vec2(dx, dy));
+    """)
+
+    /// 8-pixel cells: every pixel in a cell reads the cell's centre.
+    public static let pixelate = ShaderFunction("""
+        vec2 cells = resolution / 8.0;
+        vec2 cell = (floor(uv * cells) + 0.5) / cells;
+        fragColor = layer(cell);
+    """)
+
+    /// Red and blue pulled apart, more so the further from the pointer — or
+    /// from the centre, until the pointer has been over the view.
+    public static let chromatic = ShaderFunction("""
+        vec2 focus = mouse.x > 0.0 && mouse.y > 0.0 ? mouse / resolution : vec2(0.5);
+        vec2 away = uv - focus;
+        vec2 shift = away * 0.03;
+        float r = layer(uv + shift).r;
+        vec4 g = layer(uv);
+        float b = layer(uv - shift).b;
+        fragColor = vec4(r, g.g, b, g.a);
+    """)
+
+    /// A separable-looking 13-tap gaussian done in one pass. Colours are
+    /// weighted by alpha so the transparent surround does not darken edges —
+    /// the view is straight-alpha, like the canvas it came from.
+    public static let blur = ShaderFunction(
+        functions: """
+        vec4 blurTap(vec2 p, vec2 offset, float weight) {
+            vec4 c = layer(p + offset);
+            return vec4(c.rgb * c.a, c.a) * weight;
+        }
+        """,
+        """
+        vec2 texel = 1.5 / resolution;
+        vec4 acc = blurTap(uv, vec2(0.0), 0.16);
+        float w[3] = float[3](0.13, 0.07, 0.03);
+        for (int i = 1; i <= 3; i++) {
+            vec2 d = texel * float(i);
+            acc += blurTap(uv, vec2( d.x, 0.0), w[i - 1]);
+            acc += blurTap(uv, vec2(-d.x, 0.0), w[i - 1]);
+            acc += blurTap(uv, vec2(0.0,  d.y), w[i - 1]);
+            acc += blurTap(uv, vec2(0.0, -d.y), w[i - 1]);
+        }
+        acc /= 0.16 + 4.0 * (0.13 + 0.07 + 0.03);
+        fragColor = acc.a > 0.0 ? vec4(acc.rgb / acc.a, acc.a) : vec4(0.0);
+        """
+    )
+
+    /// Rings spreading from the centre, displacing what they pass over.
+    public static let ripple = ShaderFunction("""
+        vec2 p = uv - 0.5;
+        p.x *= resolution.x / resolution.y;
+        float d = length(p);
+        float ring = sin(d * 40.0 - time * 5.0) * 0.006 * smoothstep(0.6, 0.0, d);
+        vec2 dir = d > 0.0 ? p / d : vec2(0.0);
+        dir.x *= resolution.y / resolution.x;
+        fragColor = layer(uv + dir * ring);
+    """)
+
+    /// A post-process in ShaderToy's own form: the view is `iChannel0`, read
+    /// with the same `texture(iChannel0, uv)` a ShaderToy image pass uses.
+    public static let shaderToyPost = ShaderFunction(shaderToy: """
+        float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+
+        void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+            vec2 uv = fragCoord / iResolution.xy;
+            vec4 c = texture(iChannel0, uv);
+
+            // Film grain, new every frame, and a slow brightness breathe.
+            float grain = hash(fragCoord + fract(iTime) * 100.0) - 0.5;
+            float breathe = 0.9 + 0.1 * sin(iTime * 1.5);
+            vec3 col = c.rgb * breathe + grain * 0.06;
+
+            // Warm the highlights, cool the shadows.
+            float l = dot(col, vec3(0.299, 0.587, 0.114));
+            col = mix(col * vec3(0.9, 0.95, 1.1), col * vec3(1.1, 1.0, 0.85), l);
+
+            fragColor = vec4(col, c.a);
+        }
+    """)
 }

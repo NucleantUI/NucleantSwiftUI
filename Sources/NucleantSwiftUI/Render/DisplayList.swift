@@ -81,7 +81,7 @@ public struct Path: Hashable, Sendable {
 /// One paint operation. `bounds` is the shape's own rect — gradients resolve
 /// their `UnitPoint`s against it, so it travels with the command rather than
 /// being recomputed from the path.
-public struct ShapeDraw: Sendable {
+public struct ShapeDraw: Equatable, Sendable {
     public var path: Path
     public var bounds: Rect
     public var fill: ShapeStyle?
@@ -112,7 +112,7 @@ public struct ShapeDraw: Sendable {
     }
 }
 
-public struct TextDraw: Sendable {
+public struct TextDraw: Equatable, Sendable {
     public var string: String
     /// The box the text is laid out in — absolute, already sized by layout.
     public var frame: Rect
@@ -154,13 +154,17 @@ public struct TextDraw: Sendable {
     }
 }
 
-public enum DrawCommand: Sendable {
+public enum DrawCommand: Equatable, Sendable {
     case shape(ShapeDraw)
     case text(TextDraw)
 }
 
 /// The commands produced by one layout pass, in paint order.
-public struct DisplayList: Sendable {
+///
+/// `Equatable` so a `.shader` layer can tell whether the view under it drew
+/// anything different since its canvas was last rasterized — comparing two
+/// lists is far cheaper than a ThorVG pass that comes out identical.
+public struct DisplayList: Equatable, Sendable {
     public private(set) var commands: [DrawCommand] = []
 
     public init() {}

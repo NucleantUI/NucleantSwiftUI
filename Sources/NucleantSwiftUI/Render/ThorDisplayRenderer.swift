@@ -11,6 +11,14 @@
 //  null paint) and re-adds; the alternative — diffing paints across passes —
 //  buys nothing while rebuilds are already gated on invalidation.
 //
+//  A `.shader` effect's layer canvas is drawn the same way, with one
+//  difference: every paint goes into a root scene carrying a transform that
+//  puts the view's origin at the canvas corner and runs y upwards — so the
+//  compute shader sampling the canvas sees the view in the shader's own
+//  coordinate space. A scene rather than a per-paint matrix because ThorVG
+//  applies a paint's own transform to the paint alone, not to its clipper,
+//  while a parent scene's transform reaches both.
+//
 
 import NucleantThorVG
 
@@ -30,9 +38,33 @@ public final class ThorDisplayRenderer {
         self.canvas = canvas
     }
 
+    /// Where finished paints go: the canvas itself, or the root scene of a
+    /// layer render while one is in progress.
+    private var scene: Tvg_Paint?
+
     /// Replace the canvas contents with `list`.
     public func render(_ list: DisplayList) {
+        render(list, origin: nil, flipHeight: 0)
+    }
+
+    /// Replace the canvas contents with `list` drawn as a layer: shifted so
+    /// `origin` (points) lands at the canvas corner, and flipped so y runs
+    /// upwards over a canvas `flipHeight` pixels tall. A `.shader` effect
+    /// samples the result in shader space, where (0, 0) is the bottom-left.
+    func render(_ list: DisplayList, origin: Point?, flipHeight: Int) {
         _ = tvg_canvas_remove(canvas, nil)
+        scene = nil
+        if let origin, let root = tvg_scene_new() {
+            // Pixel space, applied after `scale`: translate by the origin,
+            // then y' = height - y.
+            var matrix = Tvg_Matrix(
+                e11: 1, e12: 0,  e13: Float(-origin.x * scale),
+                e21: 0, e22: -1, e23: Float(Double(flipHeight) + origin.y * scale),
+                e31: 0, e32: 0,  e33: 1
+            )
+            _ = tvg_paint_set_transform(root, &matrix)
+            scene = root
+        }
         for command in list.commands {
             switch command {
             case .shape(let draw):
@@ -40,6 +72,10 @@ public final class ThorDisplayRenderer {
             case .text(let draw):
                 emit(draw)
             }
+        }
+        if let scene {
+            _ = tvg_canvas_add(canvas, scene)
+            self.scene = nil
         }
     }
 
@@ -236,7 +272,11 @@ public final class ThorDisplayRenderer {
             _ = tvg_paint_set_clip(paint, clipper)
         }
 
-        _ = tvg_canvas_add(canvas, paint)
+        if let scene {
+            _ = tvg_scene_add(scene, paint)
+        } else {
+            _ = tvg_canvas_add(canvas, paint)
+        }
     }
 
     /// The same transform expressed in pixels: translation scales, the linear

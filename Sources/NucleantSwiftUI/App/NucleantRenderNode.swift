@@ -46,6 +46,13 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
     /// engine as a scissor instead.
     public var compositeScissor: SIMD4<Double>?
 
+    /// False for the canvas behind a `.shader(_:)` effect: the view's own
+    /// content is drawn into it and the effect's compute node samples it, but
+    /// it never reaches the swapchain itself — only the effect's output does.
+    /// The engine skips a slot with no image view to composite, and leaves its
+    /// size alone on a window resize.
+    public var compositesToWindow: Bool = true
+
     public init(id: Int, context: Context) {
         self.id = id
         self.context = context
@@ -91,6 +98,7 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
     }
 
     public func getImageView() -> VkImageView? {
+        guard compositesToWindow else { return nil }
         switch context {
         case .thor(let node):
             return node.imageView
@@ -100,13 +108,14 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
     }
 
     /// The canvas slot fills the window, so it has to follow the swapchain —
-    /// nothing else tracks the size for it. A shader slot is sized by its
-    /// view's frame instead, and `ShaderSlotRegistry` rebuilds it on a change.
+    /// nothing else tracks the size for it. A shader slot, and the canvas
+    /// behind a `.shader` effect, are sized by their view's frame instead, and
+    /// `ShaderSlotRegistry` rebuilds them on a change.
     public func resizeToFitWindow(width: Int, height: Int, engine: Engine) {
         switch context {
-        case .thor(let node):
+        case .thor(let node) where compositesToWindow && compositeRect == nil:
             engine.resizeThorNode(node, id: id, width: width, height: height)
-        case .shader:
+        case .thor, .shader:
             break
         }
     }

@@ -69,6 +69,27 @@ public struct ShaderFunction: Hashable, Sendable {
     /// Identity for the compiled-pipeline cache: both halves, since either
     /// changing means a recompile.
     var source: String { functions.isEmpty ? body : functions + "\n" + body }
+
+    /// Whether the shader reads anything that changes between frames.
+    ///
+    /// A source that never mentions the clock or the pointer produces the
+    /// same pixels every dispatch, so it is dispatched once — and, under
+    /// `.shader(_:)`, again only when the view beneath it is repainted. A
+    /// textual test, so a helper that takes `time` as a parameter counts too;
+    /// erring towards "animated" only costs dispatches.
+    var isAnimated: Bool {
+        let clocks: Set<Substring> = ["time", "iTime", "iTimeDelta", "iFrame", "mouse", "iMouse"]
+        var identifier = Substring()
+        for character in source {
+            if character.isLetter || character.isNumber || character == "_" {
+                identifier.append(character)
+            } else {
+                if clocks.contains(identifier) { return true }
+                identifier = Substring()
+            }
+        }
+        return clocks.contains(identifier)
+    }
 }
 
 /// A view whose pixels are produced by a compute shader on the GPU.

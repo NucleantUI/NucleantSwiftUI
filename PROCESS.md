@@ -953,3 +953,114 @@ Verified with `.build` and `Package.resolved` deleted and
 three (plus SulphurGeometry `main`), the framework binaries come along in
 the clones, and the demo runs through the full interaction set. The tree is
 back on local mode afterwards — a plain `swift build` here uses the siblings.
+
+## 19. A view as a shader's texture input — `.shader(_:)`
+
+`view-as-shader-input.md`: PyNucleantUI let a `CanvasShader` post-process
+any `CanvasBase`, because every canvas rendered into its own VkImage. The
+same should hold here, on top of the generative `Shader` view.
+
+### Shape
+
+SwiftUI's `layerEffect`, on the engine's terms:
+
+```swift
+panel.shader(ShaderLibrary.crt)          // the panel, through a CRT
+card.shader(fx, isEnabled: on)           // toggled without losing what is under it
+```
+
+Two engine nodes per effect, in the order the engine updates them:
+
+1. **A ThorVG canvas of the view's size** (`makeThorWidgetNode`, the exact
+   path PyNucleantUI's canvases took), which the view's subtree is drawn
+   into. `ShaderEffectContent.place` gives its child a display list of its
+   own instead of the window's — the child's frames are still written, so
+   hit testing does not know the difference. The canvas node sits in
+   `engine.nodes` so the engine draws it, but `compositesToWindow = false`
+   keeps its image off the swapchain (`getImageView()` answers nil) and its
+   size off the window's on a resize.
+2. **The `OGLShaderNode` that was already there**, with the canvas registered
+   as a texture input — `register(image:imageView:)` was written for exactly
+   this and had no caller — and `ShaderPipeline` grown a binding 2 sampler.
+   Its output composites where the view is.
+
+Two images rather than PyNucleantUI's in-place pass (sampler and storage on
+one image): a blur or a ripple reads neighbours that other invocations are
+writing, which in place is a race, and it also drops the requirement that
+the canvas image be storage-capable.
+
+### The canvas is stored y-up
+
+Shader space here is y-up, ShaderToy's convention. A texture sampled with
+those coordinates would come out mirrored — unless the canvas *is* y-up. So
+a layer's paints go into a root `tvg_scene` carrying one matrix: translate
+the view's origin to the corner, `y' = height - y`. A scene rather than a
+per-paint matrix because ThorVG applies a paint's own transform to that
+paint alone, not to its clipper, while a parent scene's reaches both. With
+that, `layer(uv)` is the pixel under the current one, `texelFetch` rows
+match, and an unmodified ShaderToy post-process that reads
+`texture(iChannel0, uv)` (`#define`d to the sampler) shows the view upright.
+Text drawn flipped looks fine — glyphs are paths.
+
+Verified with the `identity` effect (`fragColor = layer(uv)`) against the
+same panel drawn directly: geometrically exact; the only differing pixels
+are anti-aliased edges (≤ 64/255), from straight-alpha edge texels being
+blended a second time at the composite, and from glyph edges rasterizing at
+mirrored subpixel offsets.
+
+### What it cost, and the canvas pool
+
+First run: opening the effects gallery took **550ms** — eight rows, ~65ms
+each, of which 60ms was `tvg_wgcanvas_set_target` on a fresh canvas (ThorVG's
+wg renderer compiles its pipelines the first time it gets a target; the
+wgpu texture and the VkImage import are 0.1ms). Retargeting an *existing*
+canvas (`resizeThorNode`, the window's own resize path) is under 1ms.
+
+So canvases are pooled: a retired effect's canvas is kept (up to eight),
+and the next effect to appear takes one and retargets it — on a resize the
+outgoing slot hands its canvas straight to its replacement. Second opening
+of the gallery: **22ms**, ~1ms a slot. Memory over eighteen in/out cycles
+creeps the same ~50KB a cycle the generative gallery does (driver caches),
+nothing more.
+
+Two more things the first screenshots showed:
+
+* **Static effects are dispatched once.** `ShaderFunction.isAnimated` is a
+  scan of the source for `time`/`iTime`/`iFrame`/`mouse`/`iMouse`; a slot
+  whose source has none is not re-armed by `tick`, only by its layer being
+  redrawn. Applies to generative `Shader` views too — a shader that draws
+  the same thing every frame now draws it once.
+* **Composite rects are snapped to whole pixels at the image's size.** A
+  layer at `y = 153.93` was being bilinearly resampled — every edge in the
+  identity comparison was soft. The canvas draws from the snapped origin,
+  so nothing moves; it just lands on texels.
+
+Also changed: the pointer uniform is now relative to the slot's own rect for
+both kinds of slot — it was window-relative, flipped against the slot's
+height, which was wrong for anything smaller than the window.
+
+The thor node's post-draw barrier (NucleantThorVG) now names the compute
+stage alongside the fragment stage as the image's reader; before, only the
+composite's fragment shader was a formal consumer.
+
+### Verified
+
+Effects gallery (eight live layers over one card): correct on first and
+pooled openings; scrolled under the navigation bar, cut at the scissor. The
+mixer under Wave: fader dragged, `+` pressed — the counter and the level
+change under the distortion and the wave keeps moving; Effect off shows the
+plain panel with that state kept, Effect on brings the effect back. Under
+CRT (static): a drag redraws. Window resized 1000×700 → 800×600 → 1100×750 →
+900×648, then 1900×1000 → 700×500 → 1900×1000 with the effect on, then Back,
+Back. No crash report. `NUCLEANT_SWIFTUI_TRACE_PERF=1` gained `layers=N`
+(canvases redrawn this pass) and `=2` reports each slot build with its
+canvas cost.
+
+### Limits
+
+An effect composites as a rectangle over the canvas, so clipping belongs
+*inside* it (`.cornerRadius(10).shader(fx)`); a `Shader` view or another
+`.shader` inside an effect is a slot of its own, composited over the
+effect's output rather than through it; a moved layer is redrawn (the
+comparison is in absolute coordinates); and the canvas is the view's full
+size, so an effect over a 5000pt scroll content is a 5000px texture.
