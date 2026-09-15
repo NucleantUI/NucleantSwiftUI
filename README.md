@@ -231,9 +231,22 @@ ZStack(alignment: .leading) {
 .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
 ```
 
+`Image(_:)` draws a `RasterImage` — a decoded bitmap, made from a file with
+`RasterImage(contentsOf:)` (ImageIO, on Apple platforms), from a `CGImage`,
+or from ARGB pixels; `cropped(to:)` cuts one cell out of a sprite sheet.
+An image is drawn at its pixel size unless it is `.resizable()`, which
+stretches it to what it is offered:
+
+```swift
+let sheet = RasterImage(contentsOf: url)!
+let frame = sheet.cropped(to: Rect(x: 2, y: 2, width: 128, height: 128))
+Image(frame).resizable().scaledToFit()
+```
+
 Modifiers: `.frame(width:height:alignment:)`,
 `.frame(minWidth:maxWidth:minHeight:maxHeight:)`, `.padding(...)`,
-`.relativeSize(width:height:)`, `.background(_:)`, `.overlay(_:)`,
+`.relativeSize(width:height:)`, `.aspectRatio(_:contentMode:)` /
+`.scaledToFit()` / `.scaledToFill()`, `.background(_:)`, `.overlay(_:)`,
 `.border(_:width:)`, `.opacity`, `.offset`, `.rotationEffect`, `.scaleEffect`,
 `.clipped`, `.cornerRadius`, `.clipShape`, `.hidden`, `.onAppear`. Custom
 modifiers via `ViewModifier` + `.modifier(_:)`.
@@ -262,6 +275,70 @@ someView.gesture(
 `ScrollView(.vertical) { … }` / `.horizontal` / `[.horizontal, .vertical]`
 takes the wheel and trackpad, clips its content, and keeps its offset across
 rebuilds and navigation.
+
+### Context menus
+
+```swift
+TrackRow(track)
+    .contextMenu {
+        Button("Duplicate") { duplicate(track) }
+        Button("Rename…") { rename(track) }
+        Divider()
+        Button("Delete") { delete(track) }
+    }
+```
+
+Opens on a right click, or on a press held still on a touch host, at the
+pointer and kept inside the window. `Button`s are the rows — lit in the
+tint while pressed, run their action and close the menu — `Divider` is a
+rule, and `if` works as in any builder. A press anywhere outside closes
+it and goes no further. There is no hover highlight, no submenu, and no
+keyboard.
+
+### Drag and drop
+
+A value moves between views the way it does in SwiftUI: it is
+`Transferable`, a `.draggable` view carries it, a `.dropDestination` takes
+it.
+
+```swift
+struct Track: Codable, Transferable {
+    let name: String
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)     // its native form
+        ProxyRepresentation(exporting: \.name)        // …and as plain text
+    }
+}
+
+TrackChip(track).draggable(track)                     // the chip is the preview
+label.draggable("a note") { Text("note").padding(6) } // or bring your own
+
+bus.dropDestination(for: Track.self) { tracks, location in
+    added.append(contentsOf: tracks)                  // location in `bus`'s space
+    return true
+} isTargeted: { over in isHighlighted = over }
+
+notes.dropDestination(for: String.self) { … }         // takes the track too, via the proxy
+```
+
+`CodableRepresentation` (JSON by default, or any `TransferEncoder` /
+`TransferDecoder` pair — Foundation's property-list coders are one),
+`DataRepresentation(contentType:exporting:importing:)` and
+`ProxyRepresentation(exporting:importing:)` are the representations;
+`String`, `Data` and `URL` conform already. Content types are `UTType`s
+(`.json`, `.utf8PlainText`, `.data`, `.url`, `.png`, …, or
+`UTType(exportedAs: "com.example.track")`), and a destination for `T` takes
+a drag whose payload exports something `T` imports — by conformance, so
+`.text` takes `.json`. The transfer stays inside the process but still goes
+through the bytes, so a representation that would not survive a pasteboard
+does not survive this either.
+
+A drag starts after the pointer has moved a few points with the button
+held; a click still reaches whatever is inside, and a fader inside a
+draggable card keeps its own drag. On a touch host a draggable inside a
+scroll view starts from a press held still, so a finger can still scroll.
+The preview is a snapshot of the view as it was drawn (a `Shader` inside
+it is not in the snapshot), at 80% opacity, following the pointer.
 
 ## Navigation
 

@@ -130,6 +130,40 @@ extension AnyView: BuiltinView {
     }
 }
 
+/// What `ViewHost` actually builds: the app's root, and over it whatever
+/// the host is presenting — a context menu. Two fixed slots, so the root
+/// keeps its path (`[0]`) whether or not anything is over it, and a
+/// presentation coming and going only rebuilds slot `[1]`.
+struct _HostRoot: View {
+    let content: AnyView
+    let overlay: AnyView?
+
+    var body: Never { bodyUnavailable() }
+}
+
+extension _HostRoot: BuiltinView {
+    func makeNode(_ context: inout BuildContext) -> ViewNode {
+        let content = context.child(0) { ctx in buildNode(self.content, &ctx) }
+        let overlay = context.child(1) { ctx in buildNode(self.overlay, &ctx) }
+        return ViewNode(content: HostRootContent(), children: [content, overlay])
+    }
+}
+
+/// Both slots get the whole window. By `children`, not `layoutChildren`:
+/// an empty overlay is a transparent group that flattening would drop,
+/// shifting the slots.
+struct HostRootContent: NodeContent {
+    func sizeThatFits(_ proposal: ProposedSize, node: ViewNode) -> Size {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
+        for child in node.children {
+            child.place(in: rect, proposal: proposal, context: context, into: &list)
+        }
+    }
+}
+
 extension View {
     /// The failure a primitive view's `body` raises. Spelled out once rather
     /// than repeated at every call site.

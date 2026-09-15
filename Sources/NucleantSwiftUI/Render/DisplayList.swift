@@ -161,9 +161,38 @@ public struct TextDraw: Equatable, Sendable {
     }
 }
 
+/// A bitmap stretched into `frame`.
+public struct ImageDraw: Equatable, Sendable {
+    public var image: RasterImage
+    public var frame: Rect
+    /// The inherited opacity — a bitmap has no colours to fade at layout
+    /// time, so it carries the factor for the renderer to apply.
+    public var opacity: Double
+    public var transform: Transform
+    public var clip: Rect?
+    public var clipCornerRadius: Double
+
+    public init(
+        image: RasterImage,
+        frame: Rect,
+        opacity: Double = 1,
+        transform: Transform = .identity,
+        clip: Rect? = nil,
+        clipCornerRadius: Double = 0
+    ) {
+        self.image = image
+        self.frame = frame
+        self.opacity = opacity
+        self.transform = transform
+        self.clip = clip
+        self.clipCornerRadius = clipCornerRadius
+    }
+}
+
 public enum DrawCommand: Equatable, Sendable {
     case shape(ShapeDraw)
     case text(TextDraw)
+    case image(ImageDraw)
 }
 
 /// The commands produced by one layout pass, in paint order.

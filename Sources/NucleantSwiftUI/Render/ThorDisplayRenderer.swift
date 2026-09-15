@@ -71,6 +71,8 @@ public final class ThorDisplayRenderer {
                 emit(draw)
             case .text(let draw):
                 emit(draw)
+            case .image(let draw):
+                emit(draw)
             }
         }
         if let scene {
@@ -239,6 +241,29 @@ public final class ThorDisplayRenderer {
         case .center:   return 0.5
         case .trailing: return 1
         }
+    }
+
+    // MARK: - Images
+
+    private func emit(_ draw: ImageDraw) {
+        guard draw.frame.width > 0, draw.frame.height > 0, let picture = tvg_picture_new() else { return }
+        let image = draw.image
+        // Copied: the picture outlives this pass (the canvas holds it until
+        // the next `render`), and nothing here keeps `image` alive that long.
+        let loaded = image.pixels.withUnsafeBufferPointer { buffer in
+            tvg_picture_load_raw(
+                picture, buffer.baseAddress,
+                UInt32(image.width), UInt32(image.height),
+                TVG_COLORSPACE_ARGB8888, true
+            )
+        }
+        guard loaded == TVG_RESULT_SUCCESS else { return }
+        _ = tvg_picture_set_size(picture, f(draw.frame.width), f(draw.frame.height))
+        _ = tvg_paint_translate(picture, f(draw.frame.minX), f(draw.frame.minY))
+        if draw.opacity < 1 {
+            _ = tvg_paint_set_opacity(picture, UInt8(max(0, min(1, draw.opacity)) * 255))
+        }
+        finish(paint: picture, transform: draw.transform, clip: draw.clip, cornerRadius: draw.clipCornerRadius)
     }
 
     // MARK: - Shared tail

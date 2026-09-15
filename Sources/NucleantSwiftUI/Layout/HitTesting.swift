@@ -52,23 +52,43 @@ public final class HitTarget {
 }
 
 /// One node found under a point, with the point already mapped into its space.
+/// `value` is whatever the walk was looking for — a `HitTarget`, a
+/// `DragSource`, a `DropTarget`.
 @MainActor
-struct HitResult {
-    let target: HitTarget
+struct Hit<Value> {
+    let value: Value
+    let node: ViewNode
     let localPoint: Point
     /// The node's frame, kept so a later release can ask "still inside?".
     let frame: Rect
     let transform: Transform
 }
 
+typealias HitResult = Hit<HitTarget>
+
+extension Hit where Value == HitTarget {
+    var target: HitTarget { value }
+}
+
 extension ViewNode {
 
     /// The frontmost node under `point` (window coordinates) whose target
     /// satisfies `matching`.
+    func hitTest(_ point: Point, matching: (HitTarget) -> Bool) -> HitResult? {
+        hitTest(point) { node in
+            guard let target = node.content.hitTarget, target.isEnabled, matching(target) else {
+                return nil
+            }
+            return target
+        }
+    }
+
+    /// The frontmost node under `point` for which `select` answers — the
+    /// one walk behind every kind of hit test.
     ///
     /// Depth-first with children reversed: the display list paints children in
     /// order, so the last one drawn is on top and must be tested first.
-    func hitTest(_ point: Point, matching: (HitTarget) -> Bool) -> HitResult? {
+    func hitTest<Value>(_ point: Point, select: (ViewNode) -> Value?) -> Hit<Value>? {
         // Off screen, whatever the frames left over from an earlier pass say.
         guard !content.isParked else { return nil }
         // A clipping node's children only exist inside its frame.
@@ -76,15 +96,14 @@ extension ViewNode {
             guard let local = mapIntoLocalSpace(point), frame.contains(local) else { return nil }
         }
         for child in children.reversed() {
-            if let hit = child.hitTest(point, matching: matching) { return hit }
+            if let hit = child.hitTest(point, select: select) { return hit }
         }
 
-        guard let target = content.hitTarget, target.isEnabled, matching(target) else {
-            return nil
-        }
+        guard let value = select(self) else { return nil }
         guard let local = mapIntoLocalSpace(point), frame.contains(local) else { return nil }
-        return HitResult(
-            target: target,
+        return Hit(
+            value: value,
+            node: self,
             localPoint: Point(x: local.x - frame.minX, y: local.y - frame.minY),
             frame: frame,
             transform: transform
@@ -106,7 +125,7 @@ extension ViewNode {
     }
 }
 
-extension HitResult {
+extension Hit {
     /// The window point mapped into this result's node space, for a later
     /// event in the same gesture.
     func localPoint(for windowPoint: Point) -> Point? {

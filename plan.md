@@ -92,6 +92,13 @@ replays as `Tvg_Paint`s. Rebuild happens on invalidation, not per frame.
 - [x] `.cornerRadius`, `.clipShape`, `.hidden`, `.rotationEffect`, `.scaleEffect`
 - [x] `.onAppear`, `.onTapGesture`, `.fill`, `.stroke`
 - [x] `DragGesture` (`.gesture(_:)`), `.relativeSize(width:height:)`
+- [x] Drag and drop: `Transferable` with `CodableRepresentation`,
+      `DataRepresentation`, `ProxyRepresentation` over a pure-Swift `UTType`;
+      `.draggable(_:)` / `.draggable(_:preview:)`,
+      `.dropDestination(for:action:isTargeted:)`. In-process, through the
+      bytes; snapshot preview; hold-to-drag inside a scroll view on touch (§24)
+- [x] `.contextMenu(menuItems:)` — right click / long press, presented as
+      an overlay slot of the host's root; `Button` draws as a menu row (§25)
 
 ## Phase 7 — state
 - [x] `@State` with identity-keyed storage across rebuilds
@@ -215,6 +222,14 @@ why, and each shader slot built with its cost),
   what ThorVG's clipper wants.
 - A modifier applied to a multi-child `Group` affects the first child only;
   SwiftUI distributes it over each.
+- A context menu has no hover highlight, no submenus (`Menu`), no
+  keyboard navigation and no `preview:` form. It is positioned at the
+  pointer and clamped to the window, never flipped above it.
+- Drag and drop is in-process only — nothing reaches the system pasteboard
+  or another app, and nothing arrives from one. A drop hands over one item;
+  `FileRepresentation` and the async importers do not exist. The preview is
+  the display list the view drew, so a `Shader` or `.shader` layer inside
+  the dragged view is missing from it.
 - Text wrapping is computed twice — in `TextMeasurer` for layout, by ThorVG for
   drawing. Same metrics, so they agree, but they are not one code path.
 

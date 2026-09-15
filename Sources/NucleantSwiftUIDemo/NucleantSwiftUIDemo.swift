@@ -87,6 +87,15 @@ struct TrackRow {
         .padding(horizontal: 16, vertical: 10)
         .background(Palette.panelHighlight)
         .cornerRadius(10)
+        // Right-click (long press on touch) for the presets.
+        .contextMenu {
+            Button("Mute") { level = 0 }
+            Button("Half") { level = 0.5 }
+            Button("Full") { level = 1 }
+            Divider()
+            Button("Nudge up") { level = min(1, level + 0.05) }
+            Button("Nudge down") { level = max(0, level - 0.05) }
+        }
     }
 
     /// A track behind, a fill in front sized by `level`, and a drag that sets
@@ -328,6 +337,195 @@ struct EffectScreen {
     }
 }
 
+// MARK: - Drag and drop
+//
+// A `Transferable` payload carried from a `.draggable` to a
+// `.dropDestination`. The transfer goes through the payload's
+// representations — the track below is JSON on the way across, and its name
+// travels as plain text as well, so a text-only destination can take it.
+
+/// A track as a drag payload. `Codable`, so JSON is its native form.
+struct TrackItem: Codable, Identifiable, Transferable {
+    let id: Int
+    let name: String
+    let hex: UInt32
+
+    var color: Color { Color(hex: hex) }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+        ProxyRepresentation(exporting: \.name)
+    }
+}
+
+let trackItems = [
+    TrackItem(id: 0, name: "Kick",  hex: 0x4C8DFF),
+    TrackItem(id: 1, name: "Snare", hex: 0x3DD68C),
+    TrackItem(id: 2, name: "Hats",  hex: 0xFFB020),
+    TrackItem(id: 3, name: "Bass",  hex: 0xB57BFF),
+    TrackItem(id: 4, name: "Pad",   hex: 0xFF6F91),
+]
+
+/// One track as a small card — the palette entry and the preview that
+/// follows the pointer are the same view.
+@View
+struct TrackChip {
+    let item: TrackItem
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(item.color).frame(width: 10, height: 10)
+            Text(item.name).font(.system(size: 14, weight: .medium))
+        }
+        .padding(horizontal: 12, vertical: 7)
+        .background(Palette.panelHighlight)
+        .cornerRadius(8)
+    }
+}
+
+/// A destination for tracks. Lights up while a drag it can take is over it.
+@View
+struct Bus {
+    let name: String
+    @Binding var tracks: [TrackItem]
+    @State private var isTargeted = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(name).font(.system(size: 15, weight: .semibold))
+                Spacer()
+                if !tracks.isEmpty {
+                    Text("\(tracks.count)")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+            }
+            if tracks.isEmpty {
+                Text("Drop tracks here")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
+            ForEach(tracks) { track in
+                TrackChip(item: track)
+                    .draggable(track)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(isTargeted ? Palette.accent.opacity(0.25) : Palette.panel)
+        .border(isTargeted ? Palette.accent : Color.clear, width: 2, cornerRadius: 12)
+        .cornerRadius(12)
+        .dropDestination(for: TrackItem.self) { dropped, _ in
+            // A track already on this bus stays where it is.
+            let new = dropped.filter { item in !tracks.contains { $0.id == item.id } }
+            tracks.append(contentsOf: new)
+            return !new.isEmpty
+        } isTargeted: { over in
+            isTargeted = over
+        }
+    }
+}
+
+@View
+struct DragDropScreen {
+    @State private var busA: [TrackItem] = []
+    @State private var busB: [TrackItem] = []
+    @State private var notes: [String] = []
+    @State private var notesTargeted = false
+    @State private var lastDrop: Point? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Drag a track onto a bus. The tracks cross as JSON; the notes box takes plain text, which a track also is — and so is the label at the bottom.")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Tracks").font(.system(size: 15, weight: .semibold))
+                    ForEach(trackItems) { item in
+                        TrackChip(item: item)
+                            .draggable(item)
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                .frame(width: 150)
+                .frame(maxHeight: .infinity, alignment: .topLeading)
+                .background(Palette.panel)
+                .cornerRadius(12)
+
+                Bus(name: "Bus A", tracks: $busA)
+                Bus(name: "Bus B", tracks: $busB)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            HStack(alignment: .top, spacing: 14) {
+                notesBox
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("drop me as text")
+                        .font(.system(size: 14, weight: .medium))
+                        .padding(horizontal: 12, vertical: 7)
+                        .background(Palette.good.opacity(0.3))
+                        .cornerRadius(8)
+                        .draggable("a note from the label") {
+                            Text("a note")
+                                .padding(horizontal: 10, vertical: 6)
+                                .background(Palette.good)
+                                .cornerRadius(6)
+                        }
+                    Button("Clear") {
+                        busA.removeAll()
+                        busB.removeAll()
+                        notes.removeAll()
+                        lastDrop = nil
+                    }
+                    .tint(Palette.muted)
+                }
+            }
+            .frame(height: 110)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Takes any drag that can be text: a track (through its proxy) or the
+    /// label. Shows where the last one landed, in its own coordinates.
+    var notesBox: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Notes").font(.system(size: 15, weight: .semibold))
+                Spacer()
+                if let lastDrop {
+                    Text("last drop at \(Int(lastDrop.x)), \(Int(lastDrop.y))")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Text(notes.isEmpty ? "Drop text here" : notes.joined(separator: " · "))
+                .font(.footnote)
+                .foregroundColor(notes.isEmpty ? .secondary : .primary)
+                .lineLimit(3)
+            Spacer()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(notesTargeted ? Palette.good.opacity(0.25) : Palette.panel)
+        .border(notesTargeted ? Palette.good : Color.clear, width: 2, cornerRadius: 12)
+        .cornerRadius(12)
+        .dropDestination(for: String.self) { strings, location in
+            notes.append(contentsOf: strings)
+            lastDrop = location
+            return true
+        } isTargeted: { over in
+            notesTargeted = over
+        }
+    }
+}
+
 @View
 struct AboutScreen {
     var body: some View {
@@ -406,6 +604,8 @@ struct ContentView {
                 NavigationLink("Shaders") { ShaderGalleryScreen() }
 
                 NavigationLink("Effects") { EffectsScreen() }
+
+                NavigationLink("Drag & drop") { DragDropScreen() }
 
                 NavigationLink("About") { AboutScreen() }
 

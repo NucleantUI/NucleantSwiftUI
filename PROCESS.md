@@ -1343,3 +1343,164 @@ Still open from the device run, in
 [XcodeExamples/plan.md](XcodeExamples/plan.md): the desktop layout is
 cramped on a phone, the navigation bar ignores the safe area, no scroll
 momentum, appearance seeded once.
+
+## 24. Drag and drop, through `Transferable`
+
+The plan was three lines: the `Transferable` protocol with a real
+`CodableRepresentation`, `.draggable`, `.dropDestination`. The surface
+came out as SwiftUI's; what took the time was the compiler and the
+routing.
+
+### Declaring `Transferable` so `some TransferRepresentation` works
+
+The obvious declaration —
+
+```swift
+associatedtype Representation: TransferRepresentation where Representation.Item == Self
+```
+
+— makes every conforming type fail with "does not conform" as soon as its
+witness is written `static var transferRepresentation: some TransferRepresentation`.
+Checking the same-type requirement needs the opaque type's underlying
+type, which needs the body type-checked, which needs the conformance
+being checked. Reduced to five lines it fails the same way; giving the
+opaque type its primary associated type (`some TransferRepresentation<Self>`)
+passes, but that is not how anyone writes it. CoreTransferable's own
+interface has the answer: no same-type requirement on the associated
+type at all. The builder pins `Item` to `Self` instead, and `_exporters`
+casts once at runtime with a precondition for the witness that was
+written with a foreign type by hand.
+
+The second surprise was inference. `CodableRepresentation(contentType: .json)`
+names no item type; SwiftUI gets it from context. A `buildBlock<R>(_:) -> R
+where R.Item == Item` does *not* provide that context — the solver will
+not bind a struct's generic parameter through an associated-type equality
+on a block argument — but `buildExpression` with the same signature does,
+and that is again what CoreTransferable's interface declares. With it,
+`CodableRepresentation`, a `DataRepresentation` whose closures mention
+`$0`, and `ProxyRepresentation(exporting: \.name)` all infer.
+
+Two smaller ones: Foundation on Apple platforms re-exports
+CoreTransferable, so `String`, `Data` and `URL` already have a
+`Representation` (CoreTransferable's), and the conformances here name
+theirs with an explicit typealias or the witness is matched to the wrong
+one. And a same-element requirement on a parameter pack
+(`repeat (each R).Item == Item`) is rejected by the 6.3 compiler outright,
+so the builder has fixed arities, as CoreTransferable's does.
+
+`UTType` is a struct of the framework's own rather than
+UniformTypeIdentifiers' — the identifiers and the conformance tree are
+Apple's public ones, but nothing here should need a system framework to
+name `.json`. Likewise `TransferEncoder` / `TransferDecoder` stand in for
+Combine's `TopLevelEncoder` / `TopLevelDecoder`, which do not exist off
+Apple platforms.
+
+### Routing
+
+A `.draggable` is not a `HitTarget`. The pointer target under a press is
+found as before; the innermost drag source is found by a second walk of
+the same hit test (now generic over what it selects — `hitTest(_:select:)`
+answers for pointer targets, drag sources and drop targets alike). The
+press then proceeds as a press: a button under it highlights, a tap
+still lands. Only once the pointer has moved four points does the drag
+begin, and the button is released without its tap, exactly as the
+scroll-slop path already did for a finger that turned out to be
+scrolling. A gesture that takes drags itself (a fader) is never
+pre-empted — a fader on a draggable card keeps its own drag.
+
+On a touch host the same rule would make a list of draggable rows
+unscrollable, so there a draggable inside a scroll view starts from a
+press held still for half a second (`pressSerial` tells the timer whether
+its press is still the one in flight); moving before that scrolls.
+
+The destination under the pointer is re-found on every move. Comparing
+`DropTarget` objects was a loop: `isTargeted(true)` writes state, the
+destination rebuilds, the rebuilt node carries a new object, the next
+move sees a "new" target and tells it `true` again. Targets are compared
+by structural path — the identity that survives a rebuild — and the
+object is refreshed from each hit so the closures called are the current
+ones.
+
+The preview is the dragged node placed a second time into a display list
+nobody renders, under the context it was last placed with but unclipped,
+so a card half under the edge of its scroll view is dragged whole. Each
+frame those commands are translated by the pointer's travel and drawn
+after the tree at 80% opacity. A transformed command is moved by
+conjugating its transform with the translation rather than shifting its
+path — a rotated card must not be re-rotated about the old anchor. A
+custom preview is a tree of its own (own `StateStore`, own records, path
+prefix `[-1]` so a shader in it cannot claim a slot the tree owns),
+measured once and centred on the pointer. Neither preview is in the
+node tree, so the destination is found *through* it.
+
+Moving the pointer during a drag sets `needsRepaint` — placement and
+paint, nothing rebuilt: ~1ms a move in the demo, with a `scoped(1)`
+rebuild only when a destination is entered or left.
+
+The transfer itself is in-process but goes through the bytes: the payload
+is encoded once per content type a destination asks for, and decoded on
+the drop, so a representation that would not survive a pasteboard does
+not survive this either. A destination for `T` matches when some export
+of the payload *conforms to* something `T` imports, so `.text` takes a
+`.json` export and a track's `ProxyRepresentation(exporting: \.name)`
+lets a plain-text notes box take a track.
+
+Verified by driving the demo's "Drag & drop" screen: a track dragged
+onto a bus highlights the bus on entry, clears it on the drop, and lands
+as JSON; a track dragged onto the notes box lands as its name; the
+label with a custom preview lands as text with its drop point reported
+in the box's own coordinates; a click and a 3pt wobble on a chip start
+no drag.
+
+## 25. Context menus
+
+`.contextMenu(menuItems:)` needed three things the framework did not have:
+a right click, something drawn *over* the tree that also takes input, and
+a `Button` that looks like a menu row.
+
+The right click was a stub — `on_right_mouse_down` in `HostingWindow` was
+empty, although the macOS platform layer had delivered it all along. It
+now goes to `ViewHost.secondaryClick`, which walks the same hit test as
+everything else (`hitTest(_:select:)`, selecting `contextMenuSource`) for
+the innermost node with a menu. A touch host has no right button, so
+there the hold timer added for drag and drop does double duty: a press
+held still on a node with a menu opens it, and a menu wins over a
+draggable when a node has both, as UIKit does.
+
+The overlay is the interesting part. The drag preview is painted after
+the tree and never hit tested, which is right for a preview and wrong for
+a menu — its rows are buttons with `@State`, and a press outside must
+close it. Rather than a second tree with its own store and records (and a
+second set of the rebuild machinery to keep it live), the host's root is
+now `_HostRoot`: the app's root in slot `[0]`, whatever the host is
+presenting in slot `[1]`. Opening or closing a menu is then an ordinary
+full rebuild in which the app's subtree is compared and kept, and the
+menu is just views — a `ZStack` of a scrim and an anchored panel — under
+the same store, the same scoped rebuilds and the same hit testing as the
+rest. Its rows highlight through the same `isPressed` path as any button.
+The app's root moving from `[]` to `[0]` also means it has a parent to
+splice into, so a state write on the root view itself can now be a
+scoped rebuild rather than the fallback it used to be.
+
+The scrim is a `Color.clear` with a hit target whose `onPress` closes the
+menu. That is all it takes for "a press outside closes it and goes no
+further": the press lands on the scrim, the scrim goes away on the next
+frame, and the release finds nothing in flight.
+
+`Button` reads `\.contextMenu` from the environment, which the overlay
+sets for its subtree, and draws as a row when it finds one: full width,
+tinted while pressed, running its action and then `dismiss()`. That is
+also the one extension point for other item views — a custom row reads
+the same value.
+
+Positioning is `_anchored(at:)`, a node that fills what it is offered
+and places its child at the child's own size with the top-left corner
+at the anchor, pulled back inside the rect when it would overflow. The
+child is proposed the size it measured, so a row's `maxWidth: .infinity`
+stretches to the panel and not to its own label.
+
+Verified in the demo: a right click on a mixer row opens the presets at
+the pointer (a `full` rebuild of 3.7ms, the mixer reused), "Half" sets
+the row to 50% and closes the menu, a click outside closes it without
+reaching the row under it, and a right click on the bottom-right row
+opens the menu pulled inside the window.

@@ -58,6 +58,39 @@ public final class ViewHost {
     /// delta but no location on macOS.
     private var pointerLocation: Point = .zero
 
+    /// The drag in flight, once a press on a `.draggable` has moved far
+    /// enough (or, with a finger that could scroll instead, been held).
+    private var dragSession: DragSession?
+
+    /// The innermost `.draggable` under the press in flight — found on the
+    /// way down, separately from the pointer target, so a card is draggable
+    /// by the button on it as well as by its margins.
+    private var dragSourceHit: Hit<DragSource>?
+
+    /// Bumped on every press and release, so a hold timer can tell whether
+    /// the press it was started for is still the one in flight.
+    private var pressSerial = 0
+
+    /// How long a finger rests on a draggable inside a scroll view before
+    /// it is dragging rather than about to scroll — UIKit's figure.
+    private static let dragHoldDelay = 0.5
+
+    /// The tree is unchanged but must be painted again — the drag preview
+    /// moved. Placement only; nothing is rebuilt.
+    private var needsRepaint = false
+
+    /// The context menu on screen: where it was opened and what it holds.
+    /// Built into the tree's overlay slot on the next rebuild.
+    private var contextMenu: (anchor: Point, controller: ContextMenuController)?
+
+    /// The innermost `.contextMenu` under the press in flight, for a touch
+    /// host where a held press opens it.
+    private var contextMenuHit: Hit<ContextMenuSource>?
+
+    /// Whether a press held still opens the context menu under it — on for
+    /// touch hosts, which have no right button.
+    public var opensContextMenuOnLongPress = false
+
     /// Whether a moving pointer scrolls the `ScrollView` under it. On for
     /// touch hosts, where a finger is the only way to scroll; off for a mouse,
     /// which scrolls with its wheel and drags only what asks for drags.
@@ -98,9 +131,10 @@ public final class ViewHost {
     public func update() -> Bool {
         let work = Invalidator.shared.consume()
         let full = needsFullRebuild || work.full
-        guard full || !work.paths.isEmpty else { return false }
+        guard full || !work.paths.isEmpty || needsRepaint else { return false }
         guard size.width > 0, size.height > 0 else { return false }
         needsFullRebuild = false
+        needsRepaint = false
 
         let started = PerfTrace.isEnabled ? DispatchTime.now().uptimeNanoseconds : 0
         PerfTrace.reset()
@@ -112,6 +146,8 @@ public final class ViewHost {
         if full {
             rebuildAll(dirty: work.paths)
             kind = "full"
+        } else if work.paths.isEmpty {
+            kind = "repaint"
         } else if rebuildScoped(work.paths) {
             kind = "scoped(\(work.paths.count))"
         } else {
@@ -166,7 +202,10 @@ public final class ViewHost {
             records: records,
             dirtyPaths: dirty
         )
-        rootNode = buildNode(root, &context)
+        let overlay = contextMenu.map { menu in
+            AnyView(ContextMenuOverlay(anchor: menu.anchor, controller: menu.controller))
+        }
+        rootNode = buildNode(_HostRoot(content: root, overlay: overlay), &context)
         releaseDeparted()
     }
 
@@ -250,6 +289,9 @@ public final class ViewHost {
             context: DrawContext(colorScheme: environment.colorScheme),
             into: &list
         )
+        // Over everything, and outside the tree: the preview is drawn, never
+        // hit tested, so the destination under it is found through it.
+        dragSession?.draw(into: &list, colorScheme: environment.colorScheme)
         if LayoutTrace.isEnabled {
             LayoutTrace.dump(list)
         }
@@ -262,9 +304,23 @@ public final class ViewHost {
         pointerLocation = point
         touchStart = point
         isScrolling = false
+        pressSerial += 1
         scrollTarget = scrollsOnDrag
             ? rootNode?.hitTest(point, matching: { $0.handlesScroll })
             : nil
+        dragSourceHit = rootNode?.hitTest(point) { $0.content.dragSource }
+        contextMenuHit = opensContextMenuOnLongPress
+            ? rootNode?.hitTest(point) { $0.content.contextMenuSource }
+            : nil
+        if contextMenuHit != nil || (dragSourceHit != nil && scrollTarget != nil) {
+            // A finger resting on a view with a menu opens it; on a
+            // draggable row of a list, moving scrolls and resting drags.
+            // The timer is the rest.
+            let serial = pressSerial
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.dragHoldDelay) { [weak self] in
+                MainActor.assumeIsolated { self?.holdElapsed(serial) }
+            }
+        }
         guard let hit = rootNode?.hitTest(point, matching: { $0.handlesPointer }) else {
             InputTrace.log("down \(point) — no target")
             activeGesture = nil
@@ -284,8 +340,18 @@ public final class ViewHost {
 
     public func pointerUp(at point: Point) {
         pointerLocation = point
+        pressSerial += 1
         scrollTarget = nil
         isScrolling = false
+        dragSourceHit = nil
+        contextMenuHit = nil
+        if let session = dragSession {
+            dragSession = nil
+            let taken = session.drop(at: point, in: rootNode)
+            InputTrace.log("drop \(session.payload.itemName) at \(point) — \(taken ? "taken" : "not taken")")
+            needsRepaint = true
+            return
+        }
         guard let gesture = activeGesture else {
             InputTrace.log("up \(point) — no gesture in flight")
             return
@@ -308,6 +374,11 @@ public final class ViewHost {
         let previous = pointerLocation
         pointerLocation = point
 
+        if let session = dragSession {
+            session.move(to: point, in: rootNode)
+            needsRepaint = true
+            return
+        }
         if isScrolling {
             scrollTarget?.target.onScroll?(Point(x: point.x - previous.x, y: point.y - previous.y))
             return
@@ -330,6 +401,20 @@ public final class ViewHost {
             }
         }
 
+        // A press on a `.draggable` becomes a drag once it has travelled far
+        // enough — unless the gesture in flight takes drags itself (a fader
+        // on a draggable card keeps its own), or a finger could be scrolling
+        // instead (then only a held press starts one — `holdElapsed`).
+        if let source = dragSourceHit, scrollTarget == nil,
+           activeGesture.map({ !$0.target.takesDrags }) ?? true {
+            let dx = point.x - touchStart.x
+            let dy = point.y - touchStart.y
+            if (dx * dx + dy * dy).squareRoot() >= source.value.minimumDistance {
+                beginDrag(from: source)
+                return
+            }
+        }
+
         // Movement only means something to the gesture that is already in
         // flight: a drag must keep reporting to the view it started on, even
         // once the pointer has left that view's bounds.
@@ -347,6 +432,43 @@ public final class ViewHost {
         reportDrag(gesture: gesture, at: local, ended: false)
     }
 
+    /// The hold timer from `pointerDown` firing: still the same press, and
+    /// it has neither scrolled nor let go, so it is a drag.
+    private func holdElapsed(_ serial: Int) {
+        guard serial == pressSerial, dragSession == nil, !isScrolling else { return }
+        if let menu = contextMenuHit {
+            releaseActiveGesture()
+            dragSourceHit = nil
+            presentContextMenu(menu.value, at: touchStart)
+        } else if let source = dragSourceHit {
+            beginDrag(from: source)
+        }
+    }
+
+    /// Let the pressed view go without a tap — the press turned out to be
+    /// something else.
+    private func releaseActiveGesture() {
+        guard let gesture = activeGesture else { return }
+        gesture.target.onRelease?(gesture.localPoint(for: pointerLocation) ?? gesture.localPoint, false)
+        activeGesture = nil
+        dragPassedThreshold = false
+    }
+
+    private func beginDrag(from source: Hit<DragSource>) {
+        // The press was a drag all along.
+        releaseActiveGesture()
+        dragSourceHit = nil
+        contextMenuHit = nil
+        scrollTarget = nil
+        // Anchored at the press, not at the point the threshold was crossed,
+        // so the preview stays under the pointer where it was picked up.
+        let session = DragSession(source: source, origin: touchStart)
+        dragSession = session
+        session.move(to: pointerLocation, in: rootNode)
+        InputTrace.log("drag begins — \(session.payload.itemName) as \(session.payload.contentTypes)")
+        needsRepaint = true
+    }
+
     private func reportDrag(gesture: HitResult, at local: Point, ended: Bool) {
         let action = ended ? gesture.target.onDragEnded : gesture.target.onDragChanged
         guard let action else { return }
@@ -361,6 +483,38 @@ public final class ViewHost {
             // into a fraction with it.
             bounds: Rect(origin: .zero, size: gesture.frame.size)
         ))
+    }
+
+    // MARK: - Context menus
+
+    /// A right click: open the menu of the innermost `.contextMenu` under
+    /// `point`, closing any that is open.
+    public func secondaryClick(at point: Point) {
+        pointerLocation = point
+        if contextMenu != nil {
+            dismissContextMenu()
+        }
+        guard let hit = rootNode?.hitTest(point, select: { $0.content.contextMenuSource }) else {
+            InputTrace.log("right click \(point) — no menu")
+            return
+        }
+        presentContextMenu(hit.value, at: point)
+    }
+
+    private func presentContextMenu(_ source: ContextMenuSource, at anchor: Point) {
+        InputTrace.log("context menu at \(anchor)")
+        let controller = ContextMenuController(items: source.items) { [weak self] in
+            self?.dismissContextMenu()
+        }
+        contextMenu = (anchor, controller)
+        needsFullRebuild = true
+    }
+
+    private func dismissContextMenu() {
+        guard contextMenu != nil else { return }
+        InputTrace.log("context menu closed")
+        contextMenu = nil
+        needsFullRebuild = true
     }
 
     /// A scroll wheel / trackpad delta at the last known pointer position.
@@ -394,6 +548,12 @@ enum LayoutTrace {
                     format: "[layout] %3d text    x=%7.2f y=%7.2f w=%7.2f h=%7.2f  %@\n",
                     index, draw.frame.minX, draw.frame.minY, draw.frame.width, draw.frame.height,
                     draw.string
+                ), stderr)
+            case .image(let draw):
+                fputs(String(
+                    format: "[layout] %3d image   x=%7.2f y=%7.2f w=%7.2f h=%7.2f  %dx%d\n",
+                    index, draw.frame.minX, draw.frame.minY, draw.frame.width, draw.frame.height,
+                    draw.image.width, draw.image.height
                 ), stderr)
             }
         }

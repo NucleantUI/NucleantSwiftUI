@@ -204,8 +204,9 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         self.platformWindow = platformWindow
         platformWindow.win_delegate = self
         displayScale = Double(platformWindow.metalLayer.contentsScale)
-        // A finger has no scroll wheel.
+        // A finger has no scroll wheel, and no right button.
         host.scrollsOnDrag = true
+        host.opensContextMenuOnLongPress = true
         // Seeded once; a later appearance change is not tracked on iOS yet.
         defer { applyColorScheme(Self.systemColorScheme()) }
 
@@ -391,7 +392,10 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         }
     }
 
-    public func on_right_mouse_down(x: Double, y: Double) {}
+    public func on_right_mouse_down(x: Double, y: Double) {
+        MainActor.assumeIsolated { host.secondaryClick(at: viewPoint(x: x, y: y)) }
+    }
+
     public func on_right_mouse_up(x: Double, y: Double) {}
 
     public func on_scroll(dx: Double, dy: Double) {

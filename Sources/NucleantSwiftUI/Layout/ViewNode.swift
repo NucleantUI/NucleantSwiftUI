@@ -157,6 +157,16 @@ protocol NodeContent {
     /// back-to-front looking for these.
     var hitTarget: HitTarget? { get }
 
+    /// What a drag starting on this node carries (`.draggable`), and what a
+    /// drag ending on it may hand over (`.dropDestination`). Found by the
+    /// same walk as `hitTarget`, but looked for separately — a drop target
+    /// under the pointer is wanted even when a button sits on top of it.
+    var dragSource: DragSource? { get }
+    var dropTarget: DropTarget? { get }
+
+    /// The menu a right click (or a long press) on this node opens.
+    var contextMenuSource: ContextMenuSource? { get }
+
     /// True for a subtree kept in the tree but off screen (`._parked`). Its
     /// nodes still carry the frames from when they were last placed, and hit
     /// testing must not trust them.
@@ -178,6 +188,9 @@ protocol NodeContent {
 extension NodeContent {
     var isTransparent: Bool { false }
     var hitTarget: HitTarget? { nil }
+    var dragSource: DragSource? { nil }
+    var dropTarget: DropTarget? { nil }
+    var contextMenuSource: ContextMenuSource? { nil }
     var isParked: Bool { false }
     var clipsChildren: Bool { false }
 
