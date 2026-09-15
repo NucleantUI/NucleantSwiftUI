@@ -73,7 +73,11 @@ let package = Package(
                 .product(name: "NucleantWindow", package: "NucleantApplication"),
                 .product(name: "Platform_MacOS", package: "NucleantApplication", condition: .when(platforms: [.macOS])),
                 .product(name: "Platform_iOS", package: "NucleantApplication", condition: .when(platforms: [.iOS])),
-            ]
+            ],
+            // The default faces (Roboto, Roboto Mono) travel with the library,
+            // so text looks the same on every platform and never depends on
+            // what fonts the OS happens to ship — see FontRegistry.
+            resources: [.copy("Resources/Fonts")]
         ),
         .executableTarget(
             name: "NucleantSwiftUIDemo",

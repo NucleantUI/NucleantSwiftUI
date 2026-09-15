@@ -76,11 +76,25 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
     ) throws -> [AttributeSyntax] {
         let modifiers: DeclModifierListSyntax
         let attributes: AttributeListSyntax
+        var added: [AttributeSyntax] = []
         if let variable = member.as(VariableDeclSyntax.self) {
             // Stored properties can't carry an actor; computed ones must.
             guard variable.bindings.contains(where: { $0.accessorBlock != nil }) else { return [] }
             modifiers = variable.modifiers
             attributes = variable.attributes
+            // `body` gets the builder spelled out. The compiler infers
+            // `@ViewBuilder` from the protocol requirement for a witness, but
+            // not when the conformance arrives through this macro's extension
+            // and the body has statements (`let x = …` before the view) — that
+            // body then fails with "no return statements".
+            let isBody = variable.bindings.contains {
+                $0.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == "body"
+            }
+            if isBody, !attributes.contains(where: { attribute in
+                attribute.as(AttributeSyntax.self)?.attributeName.trimmedDescription == "ViewBuilder"
+            }) {
+                added.append("@ViewBuilder")
+            }
         } else if let function = member.as(FunctionDeclSyntax.self) {
             modifiers = function.modifiers
             attributes = function.attributes
@@ -94,13 +108,13 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
             return []
         }
         // Respect an explicit choice either way.
-        if modifiers.contains(where: { $0.name.text == "nonisolated" }) { return [] }
+        if modifiers.contains(where: { $0.name.text == "nonisolated" }) { return added }
         if attributes.contains(where: { attribute in
             attribute.as(AttributeSyntax.self)?.attributeName.trimmedDescription == "MainActor"
         }) {
-            return []
+            return added
         }
-        return ["@MainActor"]
+        return added + ["@MainActor"]
     }
 
     // MARK: Members
@@ -228,7 +242,10 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
             case .none:
                 if property.isLet && property.initializer != nil { continue }
                 let defaultValue = property.initializer.map { " = \($0)" } ?? ""
-                parameters.append("\(property.name): \(type)\(defaultValue)")
+                // A closure parameter is non-escaping by default and so can't
+                // be stored; an optional function type is already escaping.
+                let escaping = property.isFunctionTyped && !property.isOptional ? "@escaping " : ""
+                parameters.append("\(property.name): \(escaping)\(type)\(defaultValue)")
                 assignments.append("self.\(property.name) = \(property.name)")
             }
         }
@@ -255,6 +272,8 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
         let wrapper: String?
         /// Declared with a function type (`() -> Void`, `(Int) -> Bool`).
         let isFunctionTyped: Bool
+        /// Declared optional (`T?`), including an optional closure.
+        let isOptional: Bool
         let node: Syntax
     }
 
@@ -295,6 +314,7 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
                         || type.as(OptionalTypeSyntax.self)?.wrappedType.as(TupleTypeSyntax.self)?
                             .elements.first?.type.is(FunctionTypeSyntax.self) == true
                 } ?? false
+                let isOptional = type?.is(OptionalTypeSyntax.self) == true
                 result.append(StoredProperty(
                     name: name,
                     type: type?.trimmedDescription,
@@ -303,6 +323,7 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
                     isPublic: isPublic,
                     wrapper: wrapper,
                     isFunctionTyped: isFunctionTyped,
+                    isOptional: isOptional,
                     node: Syntax(binding)
                 ))
             }

@@ -12,6 +12,7 @@
 //    binding 0 — storage image (the shader's output)
 //    binding 1 — uniform buffer (`ShaderUniforms`)
 //    binding 2 — sampled image (the view's own pixels), for a `.shader` effect
+//    binding 3 — storage buffer (`ShaderArgument`s), when the shader has any
 //  A dedicated one-set pool per shader, for the reason the engine gives every
 //  composite node its own: MoltenVK packing several same-layout sets into one
 //  pool misaligns Metal argument-buffer offsets.
@@ -62,10 +63,16 @@ enum ShaderSource {
     ///
     /// Local size 8×8 matches the `(w + 7) / 8` dispatch in
     /// `OGLShaderNode.update` exactly.
-    static func compute(functions: String, body: String, samplesContent: Bool = false) -> String {
+    static func compute(
+        functions: String,
+        body: String,
+        samplesContent: Bool = false,
+        arguments: ShaderArguments = .none
+    ) -> String {
         if body.trimmingCharactersInWhitespace().hasPrefix("#version") {
             return body
         }
+        let (argumentDeclarations, argumentLoads) = argumentSource(arguments)
         let content = samplesContent ? """
         // The view this effect is applied to, rendered into its own texture
         // and stored y-up like everything else in shader space — so
@@ -88,6 +95,7 @@ enum ShaderSource {
             vec4 mouseInfo;   // xy: position, zw: position while pressed
         } u;
         \(content)
+        \(argumentDeclarations)
 
         // Constants every ShaderToy-style body reaches for, so each one does
         // not have to redeclare them.
@@ -133,6 +141,7 @@ enum ShaderSource {
             iResolution = vec3(resolution, 1.0);
             iMouse      = vec4(mouse, u.mouseInfo.z, resolution.y - u.mouseInfo.w);
         \(samplesContent ? "    iChannelResolution[0] = iResolution;" : "")
+        \(argumentLoads)
 
             // Shader space is y-up, with (0, 0) at the bottom-left — the
             // convention every ShaderToy shader is written against. The image
@@ -156,6 +165,57 @@ enum ShaderSource {
             imageStore(uOutput, pixel, fragColor);
         }
         """
+    }
+}
+
+extension ShaderSource {
+    /// The GLSL behind `ShaderArgument`s: one storage buffer of floats, a
+    /// header of (offset, count) pairs at its front, and a named variable —
+    /// or, for an array, an accessor function and a count — per argument.
+    /// Values are loaded at the top of `main` so helpers in `functions` can
+    /// read the scalars the way they read `time`.
+    ///
+    /// The declarations depend only on names and kinds, never on values or
+    /// lengths, so changing an array's contents or length never recompiles.
+    static func argumentSource(_ arguments: ShaderArguments) -> (declarations: String, loads: String) {
+        guard !arguments.isEmpty else { return ("", "") }
+        var declarations = """
+        layout(std430, binding = 3) readonly buffer ShaderArgs { float data[]; } uArgs;
+        #define ARG_OFFSET(i) int(uArgs.data[(i) * 2])
+        #define ARG_COUNT(i)  int(uArgs.data[(i) * 2 + 1])
+
+        """
+        var loads = ""
+        for (index, declaration) in arguments.declarations.enumerated() {
+            let name = declaration.name
+            let at = "ARG_OFFSET(\(index))"
+            switch declaration.type {
+            case "array":
+                declarations += """
+                int \(name)Count;
+                float \(name)(int i) {
+                    int n = ARG_COUNT(\(index));
+                    return n > 0 ? uArgs.data[\(at) + clamp(i, 0, n - 1)] : 0.0;
+                }
+
+                """
+                loads += "    \(name)Count = ARG_COUNT(\(index));\n"
+            case "float":
+                declarations += "float \(name);\n"
+                loads += "    \(name) = uArgs.data[\(at)];\n"
+            case "vec2":
+                declarations += "vec2 \(name);\n"
+                loads += "    \(name) = vec2(uArgs.data[\(at)], uArgs.data[\(at) + 1]);\n"
+            case "vec3":
+                declarations += "vec3 \(name);\n"
+                loads += "    \(name) = vec3(uArgs.data[\(at)], uArgs.data[\(at) + 1], uArgs.data[\(at) + 2]);\n"
+            default:
+                declarations += "vec4 \(name);\n"
+                loads += "    \(name) = vec4(uArgs.data[\(at)], uArgs.data[\(at) + 1], "
+                    + "uArgs.data[\(at) + 2], uArgs.data[\(at) + 3]);\n"
+            }
+        }
+        return (declarations, loads)
     }
 }
 
@@ -186,25 +246,43 @@ final class ShaderPipeline {
     /// Only with an `input`: how the shader samples the view's pixels.
     private var sampler: VkSampler?
     private let hasInput: Bool
+    /// The `ShaderArgument` storage buffer, when the shader declares any.
+    /// Sized once, with headroom; a list that outgrows it rebuilds the slot.
+    private var arguments: BufferAndMemory?
+    /// Floats the argument buffer can hold; 0 when there is none.
+    let argumentCapacity: Int
 
     /// `input` is the image the shader may sample at binding 2 — the canvas a
     /// `.shader` effect's view is drawn into. Left in `SHADER_READ_ONLY_OPTIMAL`
     /// by its own node's update, which runs before this pipeline's dispatch.
+    ///
+    /// `argumentCapacity` is how many floats of `ShaderArgument` data to make
+    /// room for — 0 for a shader without arguments, which then has no
+    /// binding 3 at all.
     init(
         engine: NucleantRenderEngine,
         imageView: VkImageView,
         input: VkImageView? = nil,
-        source: String
+        source: String,
+        argumentCapacity: Int = 0
     ) throws {
         self.device = engine.device
         self.hasInput = input != nil
+        self.argumentCapacity = argumentCapacity
         self.uniforms = engine.createBuffer(
             size: MemoryLayout<ShaderUniforms>.stride,
             usage: VkBufferUsageFlags(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT.rawValue)
         )
+        if argumentCapacity > 0 {
+            arguments = engine.createBuffer(
+                size: argumentCapacity * MemoryLayout<Float>.stride,
+                usage: VkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT.rawValue)
+            )
+        }
 
         guard let spirv = VKShaderCompiler.shared.tryCompileCompute(source) else {
             uniforms.destroy(device: device)
+            arguments?.destroy(device: device)
             // The real GLSL diagnostics, with the line numbers of the *wrapped*
             // shader — which is what someone pasting a ShaderToy source needs
             // to see rather than a bare "failed".
@@ -237,6 +315,21 @@ final class ShaderPipeline {
         )
     }
 
+    /// The argument buffer, whole. Same contract as `update`: host-coherent,
+    /// read by the next dispatch. A list longer than the capacity is a
+    /// caller error — the registry rebuilds the slot before it gets here.
+    func updateArguments(_ packed: [Float]) {
+        guard let arguments, !packed.isEmpty else { return }
+        let count = min(packed.count, argumentCapacity)
+        packed.withUnsafeBufferPointer { buffer in
+            arguments.update(
+                device: device,
+                data: UnsafeRawPointer(buffer.baseAddress!),
+                bytes: count * MemoryLayout<Float>.stride
+            )
+        }
+    }
+
     /// Idempotent. The caller drains the GPU first — an in-flight command
     /// buffer may still reference these objects.
     func destroy() {
@@ -247,6 +340,8 @@ final class ShaderPipeline {
         if let descriptorPool { vkDestroyDescriptorPool(device, descriptorPool, nil) }
         if let sampler { vkDestroySampler(device, sampler, nil) }
         uniforms.destroy(device: device)
+        arguments?.destroy(device: device)
+        arguments = nil
         pipeline = nil
         pipelineLayout = nil
         shaderModule = nil
@@ -280,6 +375,14 @@ final class ShaderPipeline {
             input.descriptorCount = 1
             input.stageFlags = VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT.rawValue)
             bindings.append(input)
+        }
+        if arguments != nil {
+            var storage = VkDescriptorSetLayoutBinding()
+            storage.binding = 3
+            storage.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+            storage.descriptorCount = 1
+            storage.stageFlags = VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT.rawValue)
+            bindings.append(storage)
         }
         let result = bindings.withUnsafeBufferPointer { buffer -> VkResult in
             var info = VkDescriptorSetLayoutCreateInfo()
@@ -343,6 +446,9 @@ final class ShaderPipeline {
         if input != nil {
             sizes.append(VkDescriptorPoolSize(type: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descriptorCount: 1))
         }
+        if arguments != nil {
+            sizes.append(VkDescriptorPoolSize(type: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, descriptorCount: 1))
+        }
         let poolResult = sizes.withUnsafeBufferPointer { buffer -> VkResult in
             var info = VkDescriptorPoolCreateInfo()
             info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO
@@ -380,9 +486,15 @@ final class ShaderPipeline {
         inputInfo.imageView = input
         inputInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
 
+        var argumentInfo = VkDescriptorBufferInfo()
+        argumentInfo.buffer = arguments?.buffer
+        argumentInfo.offset = 0
+        argumentInfo.range = VkDeviceSize(VK_WHOLE_SIZE)
+
         withUnsafePointer(to: &imageInfo) { imagePtr in
             withUnsafePointer(to: &bufferInfo) { bufferPtr in
                 withUnsafePointer(to: &inputInfo) { inputPtr in
+                withUnsafePointer(to: &argumentInfo) { argumentPtr in
                     var writeImage = VkWriteDescriptorSet()
                     writeImage.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
                     writeImage.dstSet = descriptorSet
@@ -410,7 +522,18 @@ final class ShaderPipeline {
                         writeInput.pImageInfo = inputPtr
                         writes.append(writeInput)
                     }
+                    if arguments != nil {
+                        var writeArguments = VkWriteDescriptorSet()
+                        writeArguments.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
+                        writeArguments.dstSet = descriptorSet
+                        writeArguments.dstBinding = 3
+                        writeArguments.descriptorCount = 1
+                        writeArguments.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                        writeArguments.pBufferInfo = argumentPtr
+                        writes.append(writeArguments)
+                    }
                     vkUpdateDescriptorSets(device, UInt32(writes.count), &writes, 0, nil)
+                }
                 }
             }
         }

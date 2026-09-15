@@ -224,7 +224,7 @@ public final class ThorDisplayRenderer {
         if draw.lineLimit == 1 {
             wrapMode = draw.isTruncated ? TVG_TEXT_WRAP_ELLIPSIS : TVG_TEXT_WRAP_NONE
         } else {
-            wrapMode = TVG_TEXT_WRAP_WORD
+            wrapMode = draw.wraps ? TVG_TEXT_WRAP_WORD : TVG_TEXT_WRAP_NONE
         }
         _ = tvg_text_wrap_mode(text, wrapMode)
         _ = tvg_text_align(text, Float(alignFactor(draw.alignment)), 0)

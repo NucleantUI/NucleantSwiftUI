@@ -1,0 +1,119 @@
+# The Sampler example as an Xcode app — the same sources the standalone
+# package in Examples/Sampler builds, here as an iOS (device/simulator)
+# and macOS app. Regenerate the .xcodeproj after editing this:
+#
+#     cd XcodeExamples/Sampler && xcodegen
+#
+name: Sampler
+options:
+  bundleIdPrefix: org.nucleantui
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+  # Package.swift is the source of truth for both minimums.
+  xcodeVersion: "26.0"
+  # Xcode would otherwise add a scheme per package target, including one
+  # for the library package's own `NucleantSwiftUIDemo` executable — a macOS command
+  # line tool with the same sources, which is not the app. Only the shared
+  # `SamplerApp` scheme is wanted.
+  postGenCommand: >-
+    mkdir -p Sampler.xcodeproj/project.xcworkspace/xcshareddata &&
+    printf '%s\n'
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    '<plist version="1.0">'
+    '<dict>'
+    '	<key>IDEWorkspaceSharedSettings_AutocreateContextsIfNeeded</key>'
+    '	<false/>'
+    '</dict>'
+    '</plist>'
+    > Sampler.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+
+# The enclosing checkout, as a local package. Its Package.swift picks up the
+# sibling Nucleant checkouts (`../NucleantVulkan` etc.) the same way it does
+# for `swift build` — see `localDev` there.
+packages:
+  NucleantSwiftUI:
+    path: ../..
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: "YES"
+
+targets:
+  # Named apart from the example package's `Sampler` executable target
+  # that shares its sources, so the two never get confused in a scheme list.
+  SamplerApp:
+    type: application
+    platform: auto
+    supportedDestinations: [iOS, macOS]
+    sources:
+      # The example package's executable target, unchanged: `@main struct SamplerApp:
+      # NucleantApp` is the app's entry point on both platforms.
+      - path: ../../Examples/Sampler/Sources/Sampler
+    dependencies:
+      - package: NucleantSwiftUI
+    settings:
+      base:
+        PRODUCT_NAME: Sampler
+        PRODUCT_BUNDLE_IDENTIFIER: org.nucleantui.Sampler
+        # Signing. Sign to run locally by default: that is all the simulator
+        # and macOS need, and Xcode's team check reads the *unconditioned*
+        # identity, so an `[sdk=macosx*]` override alone would still demand a
+        # team for the Mac build. Only a real iOS device needs a certificate —
+        # set the team in Xcode (Signing & Capabilities) for that. These sit
+        # on the target because xcodegen's application preset puts
+        # `CODE_SIGN_IDENTITY = "iPhone Developer"` there, above any
+        # project-level value.
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_IDENTITY: "-"
+        "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Development"
+        SUPPORTED_PLATFORMS: iphoneos iphonesimulator macosx
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: "NO"
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: "NO"
+        # MoltenVK / ThorVG / libomp are dynamic frameworks from the packages'
+        # binary targets; Xcode embeds them here.
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/Frameworks"
+          - "@executable_path/../Frameworks"
+        # Package.swift's macro target (`@View`, `#viewID`) has to run at
+        # build time. Xcode asks once to trust it; `xcodebuild` needs
+        # `-skipMacroValidation`.
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleDisplayName: Sampler
+        # iOS. A scene manifest with no delegate class named: UIKit then asks
+        # the app delegate for a configuration, and NucleantSwiftUI's
+        # `_AppLaunchDelegate` answers with its own scene delegate. That is
+        # what lets the demo's `@main` be plain `NucleantApp` on iOS. The
+        # empty UILaunchScreen is the system-generated launch screen — without
+        # it iOS runs the app letterboxed at a legacy size.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        UIStatusBarHidden: true
+        UIViewControllerBasedStatusBarAppearance: false
+        UIRequiresFullScreen: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # macOS.
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHighResolutionCapable: true
+    scheme:
+      testTargets: []
+      gatherCoverageData: false

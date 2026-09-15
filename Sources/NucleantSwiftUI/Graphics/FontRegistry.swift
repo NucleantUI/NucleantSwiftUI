@@ -17,6 +17,7 @@
 
 import Foundation
 import NucleantThorVG
+import CoreText
 
 @MainActor
 public enum FontRegistry {
@@ -41,19 +42,40 @@ public enum FontRegistry {
     /// Explicit registrations: our family name → file path.
     private static var registeredPaths: [String: String] = [:]
 
-    /// Where the built-in designs come from, in preference order. Ordered so a
-    /// face ThorVG can actually parse comes first: macOS ships Helvetica and
-    /// Menlo *only* as `.ttc` collections, which its loader rejects (see
-    /// `fontExtensions`), so those are listed after a `.ttf` equivalent rather
-    /// than first.
+    /// Where the built-in designs come from, in preference order. The bundled
+    /// faces (`bundledFaces`) lead: they are in the library's resource bundle
+    /// on every platform, so the default look never depends on what the OS
+    /// ships — iOS has no Helvetica Neue outside a `.ttc`, Linux has none of
+    /// these. The system names after them are what an explicit request or a
+    /// design without a bundled face (serif) falls through to; ordered so a
+    /// face ThorVG can parse comes first — macOS ships Helvetica and Menlo
+    /// *only* as `.ttc` collections, which its loader rejects (see
+    /// `fontExtensions`).
     private static let builtinFaces: [FontDesign: [String]] = [
-        .default:    ["Helvetica Neue", "Arial", "Geneva", "Helvetica"],
-        .serif:      ["Times New Roman", "Georgia", "Palatino"],
-        .monospaced: ["Monaco", "Courier New", "Andale Mono", "Menlo"],
-        .rounded:    ["Arial Rounded Bold", "Arial", "Geneva"],
+        .default:    ["Roboto", "Helvetica Neue", "Arial", "Geneva", "Helvetica"],
+        .serif:      ["Times New Roman", "Georgia", "Palatino", "Roboto"],
+        .monospaced: ["Roboto Mono", "Monaco", "Courier New", "Andale Mono", "Menlo"],
+        .rounded:    ["Roboto", "Arial Rounded Bold", "Arial", "Geneva"],
     ]
 
-    /// Directories scanned for a face named by `builtinFaces`.
+    /// Face name → file in the library's `Resources/Fonts`. Roboto and Roboto
+    /// Mono, Apache 2.0 / OFL; the licences sit next to the files.
+    private static let bundledFaces: [String: String] = [
+        "Roboto":                  "Roboto-Regular",
+        "Roboto Bold":             "Roboto-Bold",
+        "Roboto Italic":           "Roboto-Italic",
+        "Roboto Bold Italic":      "Roboto-BoldItalic",
+        "Roboto Mono":             "RobotoMono-Regular",
+        "Roboto Mono Bold":        "RobotoMono-Bold",
+        "Roboto Mono Italic":      "RobotoMono-Italic",
+        "Roboto Mono Bold Italic": "RobotoMono-BoldItalic",
+    ]
+
+    /// Directories scanned for a face named by `builtinFaces` as a
+    /// `Family Bold.ttf`-style file — the macOS layout. iOS keeps its fonts in
+    /// subdirectories (`Core/`, `WebFonts/`, …) under names without spaces
+    /// (`ArialBold.ttf`), so a face not found here is asked of CoreText
+    /// instead, which knows the file for a family on both platforms.
     private static let searchDirectories = [
         "/System/Library/Fonts",
         "/System/Library/Fonts/Supplemental",
@@ -104,8 +126,25 @@ public enum FontRegistry {
             for name in faceNames(family: family, bold: key.isBold, italic: key.isItalic) {
                 if ensureLoaded(name) { return name }
             }
+            // Nothing under a macOS-style file name; let CoreText name the
+            // file, most specific style first, like `faceNames`.
+            for (bold, italic) in styleFallbacks(bold: key.isBold, italic: key.isItalic) {
+                let name = faceNames(family: family, bold: bold, italic: italic)[0]
+                if ensureLoaded(name, coreTextFamily: family, bold: bold, italic: italic) { return name }
+            }
         }
         return nil
+    }
+
+    /// The style combinations to try for a requested weight/slant, most
+    /// specific first, ending in the regular face.
+    private static func styleFallbacks(bold: Bool, italic: Bool) -> [(Bool, Bool)] {
+        var styles: [(Bool, Bool)] = []
+        if bold && italic { styles.append((true, true)) }
+        if bold           { styles.append((true, false)) }
+        if italic         { styles.append((false, true)) }
+        styles.append((false, false))
+        return styles
     }
 
     /// The file-name variants a family/weight/italic combination might be
@@ -135,7 +174,53 @@ public enum FontRegistry {
         return true
     }
 
+    /// `ensureLoaded(_:)` with CoreText locating the file. Keyed apart from
+    /// the file-name lookup so a miss there doesn't poison this one.
+    private static func ensureLoaded(_ name: String, coreTextFamily family: String, bold: Bool, italic: Bool) -> Bool {
+        if loaded.contains(name) { return true }
+        let key = "coretext:" + name
+        if failed.contains(key) { return false }
+
+        guard let path = locateWithCoreText(family: family, bold: bold, italic: italic),
+              load(family: name, from: path) else {
+            failed.insert(key)
+            return false
+        }
+        return true
+    }
+
+    /// The font file CoreText would use for `family` in the given style, if it
+    /// is a single-face file ThorVG can parse. Family and traits are both
+    /// mandatory in the match, so a family without a bold face yields nil
+    /// here rather than a silently regular one — the caller then falls back
+    /// to the next style itself.
+    private static func locateWithCoreText(family: String, bold: Bool, italic: Bool) -> String? {
+        var traits = CTFontSymbolicTraits()
+        if bold   { traits.insert(.boldTrait) }
+        if italic { traits.insert(.italicTrait) }
+        let attributes: [CFString: Any] = [
+            kCTFontFamilyNameAttribute: family,
+            kCTFontTraitsAttribute: [kCTFontSymbolicTrait: traits.rawValue],
+        ]
+        let descriptor = CTFontDescriptorCreateWithAttributes(attributes as CFDictionary)
+        let mandatory: Set<CFString> = [kCTFontFamilyNameAttribute, kCTFontTraitsAttribute]
+        guard let match = CTFontDescriptorCreateMatchingFontDescriptor(descriptor, mandatory as CFSet),
+              let url = CTFontDescriptorCopyAttribute(match, kCTFontURLAttribute) as? URL else {
+            return nil
+        }
+        let path = url.path
+        guard fontExtensions.contains(where: { path.lowercased().hasSuffix($0) }),
+              FileManager.default.isReadableFile(atPath: path) else {
+            return nil
+        }
+        return path
+    }
+
     private static func locate(_ name: String) -> String? {
+        if let file = bundledFaces[name],
+           let url = Bundle.module.url(forResource: file, withExtension: "ttf", subdirectory: "Fonts") {
+            return url.path
+        }
         let manager = FileManager.default
         for directory in searchDirectories {
             for suffix in fontExtensions {

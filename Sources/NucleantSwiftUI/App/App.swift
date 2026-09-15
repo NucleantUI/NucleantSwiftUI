@@ -8,6 +8,9 @@ import NucleantThorVG
 #if os(macOS)
 import AppKit
 #endif
+#if os(iOS)
+import UIKit
+#endif
 
 /// A part of an app's user interface with a life cycle — currently, a window.
 @MainActor
@@ -103,6 +106,11 @@ public enum AppRuntimeSettings {
     /// is what a GPU canvas wants — the raster workers only help the software
     /// backend. Set before `main()` to override.
     @MainActor public static var thorVGThreadCount: UInt32 = 0
+
+    /// Force every window light or dark instead of following the system.
+    /// `nil` — the default — follows it. Set before `main()`; a subtree can
+    /// still be fixed the other way with `.colorScheme(_:)`.
+    @MainActor public static var colorScheme: ColorScheme? = nil
 }
 
 /// Bridges a `NucleantApp` onto `NucleantApplication`, the platform-lifecycle
@@ -124,6 +132,12 @@ public final class AppRuntime<A: NucleantApp>: NucleantApplication {
 
 
     public func onStart() {
+        // The engine reports what went wrong on stdout, which is fully
+        // buffered when the process isn't on a terminal — Xcode's console
+        // included — so a failure on a device shows up late or never. Line
+        // buffering costs nothing in a GUI app.
+        setvbuf(stdout, nil, _IOLBF, 0)
+
         // ThorVG's engine has to be up before any canvas is created —
         // `tvg_wgcanvas_create` returns null otherwise, which is exactly what a
         // missing init looks like from the outside. PyNucleantUI does the same
@@ -140,15 +154,106 @@ public final class AppRuntime<A: NucleantApp>: NucleantApplication {
         }
     }
 
-    /// Hand control to the platform event loop.
+    /// Hand control to the platform event loop. Does not return.
     ///
-    /// On iOS the host owns the loop (`SDL_UIKitRunApp` / the UIKit runner
-    /// starts it and calls `onStart` for us), so there is nothing to run here.
+    /// macOS: `setup()` already installed the delegate whose
+    /// `applicationDidFinishLaunching` calls `onStart`, so this is just the
+    /// run loop. iOS inverts that — `UIApplicationMain` owns the
+    /// `UIApplication` and instantiates the delegate *by class name*, so the
+    /// runtime can't be the delegate itself (a generic class has no ObjC
+    /// name); `_AppLaunchDelegate` stands in and calls back here once a
+    /// window scene is connected, which is the earliest `HostingWindow` can
+    /// build a scene-owned `UIWindow`.
     public func run() {
         #if os(macOS)
         NSApplication.shared.run()
         #elseif os(iOS)
-        onStart()
+        // A bare executable — a SwiftPM executable product run on the
+        // simulator, rather than an app target — has no bundle, and UIKit
+        // aborts on the missing bundle identifier inside UIApplicationMain
+        // with nothing to say why. Say why.
+        guard Bundle.main.bundleIdentifier != nil else {
+            fputs("""
+                NucleantSwiftUI: no app bundle (\(Bundle.main.bundlePath)). \
+                On iOS run an application target — for the demo, the \
+                NucleantSwiftUIDemoApp scheme in XcodeExamples — not the \
+                package's executable product.
+
+                """, stderr)
+            exit(1)
+        }
+        _AppLaunchDelegate.onLaunch = { [self] in onStart() }
+        UIApplicationMain(
+            CommandLine.argc,
+            CommandLine.unsafeArgv,
+            nil,
+            NSStringFromClass(_AppLaunchDelegate.self)
+        )
         #endif
     }
 }
+
+#if os(iOS)
+/// The `UIApplicationDelegate` the runtime hands to `UIApplicationMain`.
+///
+/// It decides *when* the app's windows get presented. With a scene manifest
+/// in Info.plist (`UIApplicationSceneManifest`, the default for a modern
+/// iOS target) UIKit asks for a scene configuration and the answer names
+/// `_AppSceneDelegate`, which presents once its `UIWindowScene` connects —
+/// that always happens after `didFinishLaunching`, and a window built from
+/// the scene is what tracks Stage Manager resizing. Without a manifest UIKit
+/// never connects a scene, so the legacy path presents right away onto a
+/// screen-sized frame instead. Either way `onLaunch` fires exactly once.
+public final class _AppLaunchDelegate: UIResponder, UIApplicationDelegate {
+    /// Set by `AppRuntime.run()` before `UIApplicationMain` takes over.
+    nonisolated(unsafe) static var onLaunch: (@MainActor () -> Void)?
+    private nonisolated(unsafe) static var launched = false
+
+    static func launchOnce() {
+        guard !launched else { return }
+        launched = true
+        onLaunch?()
+    }
+
+    public func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        if Bundle.main.object(forInfoDictionaryKey: "UIApplicationSceneManifest") == nil {
+            Self.launchOnce()
+        }
+        return true
+    }
+
+    public func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        // Built in code rather than named in the plist: the plist would need
+        // the mangled `NucleantSwiftUI._AppSceneDelegate`, which is the
+        // library's business, not the app's.
+        let config = UISceneConfiguration(
+            name: "Default Configuration",
+            sessionRole: connectingSceneSession.role
+        )
+        config.delegateClass = _AppSceneDelegate.self
+        return config
+    }
+}
+
+/// Records the connecting scene in `ActiveScene.current` — where
+/// `HostingWindow.present()` looks for the scene to attach to — then lets
+/// the runtime present.
+public final class _AppSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    public func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        guard let windowScene = scene as? UIWindowScene else { return }
+        ActiveScene.current = windowScene
+        _AppLaunchDelegate.launchOnce()
+    }
+}
+#endif

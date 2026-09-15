@@ -7,3 +7,5 @@ DerivedData/
 .swiftpm/
 .vscode/
 *.ips
+Examples/*/.build
+Examples/*/Package.resolved

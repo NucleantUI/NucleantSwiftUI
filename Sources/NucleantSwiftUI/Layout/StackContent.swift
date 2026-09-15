@@ -3,10 +3,14 @@
 //  NucleantSwiftUI
 //
 //  The stack layout. Children are sized in flexibility order — least flexible
-//  first — with each group offered an equal share of what is still unclaimed.
-//  That is what makes `HStack { Text("a"); Spacer(); Text("b") }` put the texts
-//  at their natural widths and give the rest to the spacer, rather than
-//  splitting the width three ways.
+//  first — and a group only ever sees what the stricter groups left behind:
+//  a `Spacer` gets leftovers, never a share. Within the content group each
+//  child is offered its ideal extent when all of them fit, and an equal share
+//  of what is left when they don't. That is what makes
+//  `HStack { Text("a"); Spacer(); Text("b") }` put the texts at their natural
+//  widths and give the rest to the spacer, rather than splitting the width
+//  three ways. A node's flexibility is that of what it wraps (a stack: its
+//  most flexible child), so a padded row of fixed frames is fixed too.
 //
 
 struct StackContent: NodeContent {
@@ -19,6 +23,13 @@ struct StackContent: NodeContent {
     static let defaultSpacing: Double = 8
 
     private var resolvedSpacing: Double { spacing ?? Self.defaultSpacing }
+
+    /// As flexible as the most flexible child: a row of fixed frames is fixed
+    /// and must be sized before a sibling `Text`; one holding a `Spacer`
+    /// soaks up whatever is left.
+    func flexibility(along axis: Axis, node: ViewNode) -> LayoutPriorityClass {
+        node.layoutChildren.map { $0.flexibility(along: axis) }.max() ?? .content
+    }
 
     func sizeThatFits(_ proposal: ProposedSize, node: ViewNode) -> Size {
         layout(proposal, children: node.layoutChildren).total
@@ -95,7 +106,6 @@ struct StackContent: NodeContent {
         // What's left for the children themselves. An unspecified main axis
         // means nobody is constraining the stack, so each child sizes itself.
         var remaining = proposal[axis].map { max(0, $0 - totalSpacing) }
-        var unplaced = children.count
 
         var sizes = [Size](repeating: .zero, count: children.count)
         var proposals = [ProposedSize](repeating: proposal, count: children.count)
@@ -104,20 +114,49 @@ struct StackContent: NodeContent {
         // Least flexible first: a fixed `.frame` before a `Text` before a
         // `Spacer`, so each group only sees what the stricter ones left behind.
         for group in [LayoutPriorityClass.fixed, .content, .flexible] {
-            for (index, child) in children.enumerated()
-            where !sized[index] && child.content.flexibility(along: axis) == group {
+            let members = children.indices.filter {
+                !sized[$0] && children[$0].flexibility(along: axis) == group
+            }
 
+            // Content children — text, mostly — are offered their ideal
+            // extent when all of those fit in what is left, so a row of
+            // labels and buttons that plainly fits never wraps one of them
+            // just because it came first and was handed an equal share.
+            // When they don't all fit, the equal share below decides who
+            // shrinks. A child whose ideal is unbounded (a colour, a shape)
+            // makes the sum infinite and lands in the same fallback.
+            var ideals: [Int: Double] = [:]
+            if group == .content, let remaining {
+                var hi = proposal
+                hi[axis] = .infinity
+                var sum = 0.0
+                for index in members {
+                    let ideal = children[index].sizeThatFits(hi)[axis]
+                    ideals[index] = ideal
+                    sum += ideal
+                }
+                if !(sum <= remaining) { ideals.removeAll() }
+            }
+
+            var unsizedInGroup = members.count
+            for index in members {
+                let child = children[index]
                 var childProposal = proposal
-                if let remaining {
-                    // An equal share of what's left, not the whole thing —
-                    // otherwise the first greedy child eats everything.
-                    childProposal[axis] = unplaced > 0 ? remaining / Double(unplaced) : 0
+                if let ideal = ideals[index] {
+                    childProposal[axis] = ideal
+                } else if let remaining {
+                    // An equal share of what's left among the children still
+                    // to size *in this group* — not the whole thing, or the
+                    // first greedy child eats everything; and not a share
+                    // with the more flexible groups, which only ever get
+                    // what is left over, the way a `Spacer` does in SwiftUI.
+                    childProposal[axis] = remaining / Double(unsizedInGroup)
                 }
                 let size = child.sizeThatFits(childProposal)
                 sizes[index] = size
                 proposals[index] = childProposal
                 sized[index] = true
-                unplaced -= 1
+                unsizedInGroup -= 1
                 if remaining != nil {
                     remaining = max(0, remaining! - size[axis])
                 }
@@ -128,8 +167,12 @@ struct StackContent: NodeContent {
         total[axis] = sizes.reduce(0) { $0 + $1[axis] } + totalSpacing
         total[crossAxis] = sizes.reduce(0) { max($0, $1[crossAxis]) }
         // Never claim more than was offered — a stack that overflowed still
-        // reports the box it was given, and its children simply spill.
-        if let limit = proposal[axis] { total[axis] = min(total[axis], max(limit, 0)) }
+        // reports the box it was given, and its children simply spill. The
+        // exception is a run of fixed children: that is as immovable as a
+        // fixed `.frame`, and reports its true extent so the stack around it
+        // sizes the rest around *that* rather than around an equal share.
+        let isFixedRun = children.allSatisfy { $0.flexibility(along: axis) == .fixed }
+        if let limit = proposal[axis], !isFixedRun { total[axis] = min(total[axis], max(limit, 0)) }
         if let limit = proposal[crossAxis] { total[crossAxis] = min(total[crossAxis], max(limit, 0)) }
 
         return LayoutResult(sizes: sizes, proposals: proposals, total: total)
@@ -139,6 +182,10 @@ struct StackContent: NodeContent {
 /// Depth-stacked children, all sharing one rect.
 struct ZStackContent: NodeContent {
     let alignment: Alignment
+
+    func flexibility(along axis: Axis, node: ViewNode) -> LayoutPriorityClass {
+        node.layoutChildren.map { $0.flexibility(along: axis) }.max() ?? .content
+    }
 
     func sizeThatFits(_ proposal: ProposedSize, node: ViewNode) -> Size {
         var result = Size.zero

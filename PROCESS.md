@@ -1064,3 +1064,282 @@ An effect composites as a rectangle over the canvas, so clipping belongs
 effect's output rather than through it; a moved layer is redrawn (the
 comparison is in absolute coordinates); and the canvas is the view's full
 size, so an effect over a 5000pt scroll content is a 5000px texture.
+
+## 20. Six example apps, and what building them turned up
+
+`Examples/` has six standalone packages — Calculator, Tasks, Sketch,
+Dashboard, TwentyFortyEight, Pomodoro — each a different shape of app on
+the same library. Writing apps that were *not* the demo was the point: the
+demo was built alongside the framework and had learned to avoid its
+corners. Each of the following was found by an example failing to build
+or drawing wrong, and verified by driving the example with real input and
+reading the screenshot.
+
+### `@View` and a stored closure
+
+The generated memberwise init spelled a closure property's parameter as
+`action: () -> Void` — non-escaping, so `self.action = action` did not
+compile. The macro now adds `@escaping` to a function-typed parameter
+(an optional closure is already escaping and is left alone). The
+"stored closure — this view always rebuilds" warning stays; it is about
+comparison, not about compiling.
+
+### `@View` and a `let` in `body`
+
+`var body: some View { let x = …; Text("\(x)") }` failed with "no return
+statements" in a `@View` struct and compiled in a plain `struct: View`.
+The compiler infers `@ViewBuilder` on a witness from the protocol
+requirement, but not when the conformance is added by the macro's own
+extension and the body has statements. The member-attribute role now puts
+`@ViewBuilder` on `body` explicitly.
+
+### A fitted label wrapped when drawn
+
+"Delete task" measured as one line, was laid out as one line, and ThorVG
+drew it as two: its layout of the string came out a fraction wider than
+the summed advances and the box was an exact fit. The same slack that
+decides ellipsis (`isTruncated`) now decides wrapping — `TextDraw.wraps`
+is false when layout found the string fits one line, and the renderer
+draws it with `TVG_TEXT_WRAP_NONE`.
+
+### Stack sizing, three times
+
+The examples are full of rows the demo did not have — a row of eight
+fixed swatches, a title next to two buttons, a status line beside score
+boxes — and each of those exposed a way the stack's "least flexible first,
+equal share of what is left" rule fell short of what it was meant to do.
+
+*A wrapped node lost its flexibility.* `flexibility(along:)` was answered
+by the node's content alone, so every modifier and every stack said
+`.content` — a padded circle in a fixed frame, or an `HStack` of eight of
+them, looked as squeezable as a `Text` and was offered an eighth of the
+row. It now takes the node: a wrapper answers for what it wraps, a stack
+with its most flexible child, and a `.frame` only overrides on the axis it
+actually constrains. With that, a `Spacer` had to stop claiming to be
+flexible across its stack's axis (it has no extent there), or a button row
+became vertically flexible and the mixer's scroll view shrank to two rows.
+And a run of fixed children now reports its true extent instead of the
+clamped offer, the way a fixed `.frame` does — otherwise the swatch row was
+still cut to its share and spilled over the brush picker.
+
+*A share was split with the spacer.* The equal share divided what was left
+by *all* unplaced children, so `HStack { Text; Spacer(); fixed; fixed }`
+offered the text half of the remaining width and the spacer the other
+half — the 2048 status line wrapped to four words a line. The divisor is
+now the number of children still to size in the *current* group; more
+flexible groups only ever get what is left, which is what a `Spacer` is
+for.
+
+*Everything fit, and something wrapped anyway.* `Hide mixer` in the demo's
+own button row wrapped to two lines with 200pt to spare, because it came
+first and was offered a seventh of the row before the others took their
+smaller ideals. SwiftUI orders children by measured flexibility; this is
+narrower but covers the case: the content group is measured at its ideal
+(the axis proposed infinite) and, when the ideals add up to no more than
+what is left, each child is offered exactly its ideal. When they don't
+fit — or a child's ideal is unbounded, a colour, a shape — the equal share
+decides who shrinks, as before.
+
+Checked against the demo before and after: the mixer, the button row (now
+one line), the shader and effects galleries, an effect screen two levels
+deep, Back, Back — all as before or better, with the layout trace and
+screenshots. The rule that survives unchanged is that `.relativeSize` is
+a fraction of what the *stack offers*, not of the row: the examples say
+so where it bit (a 62% card is 62% of half a row) and use a `ZStack` or a
+fixed sibling instead.
+
+## 21. `@Observable` models, shader arguments, and a starved main queue
+
+The Sampler example (`Examples/Sampler`) is SamplerUI's shape on this
+stack: an `@Observable` model per pad, a min/max envelope reduced with
+vDSP off the main thread, a shader that rasterizes it from two float
+arrays, faders bound straight into the model. Three things had to exist
+first.
+
+### Observation
+
+`@State` is tracked by the framework's own reader registration;
+`@Observable` properties are tracked by the standard library's
+`withObservationTracking`. `buildNode` now evaluates a composed view's
+`body` inside one, and `ForEach` evaluates each row closure inside one,
+with the change handler dirtying that view's path through
+`Invalidator.invalidateFromAnyThread` (immediate on the main thread, a
+main-queue hop otherwise).
+
+Scopes never nest. A scope wraps the *construction* of a view value —
+`view.body`, `build(element)` — and never the building of the node it
+returns, because Observation merges a nested scope's accesses into its
+parent's: wrapping the whole build would attribute every descendant's
+reads to the root and turn each change into a full rebuild. Custom
+`ViewModifier`s need nothing extra — `ModifiedContent` is a composed view
+whose body calls `modifier.body(content:)`.
+
+A class reference is now an *equivalent* input when it is the same object
+(`_dynamicallyEquivalent` compares by identity; `Bindable` likewise). It
+used to be refused ("a class can mutate underneath"), which is exactly the
+case observation now covers: what a view reads from the object is tracked,
+so the reference itself need not look different for the view to rebuild.
+`@Bindable` is SwiftUI's — `$model.gain` is a `Binding` through a
+`ReferenceWritableKeyPath`, and a write through it is a write to the
+object, seen by every reader.
+
+### Shader arguments
+
+`ShaderArgument` is SwiftUI's `Shader.Argument` with names: `.float`,
+`.float2/3/4`, `.color`, `.floatArray`. They are packed into one storage
+buffer (binding 3, `std430 float[]`) with a header of (offset, count) per
+argument, and the wrapper generates a variable per scalar, and `name(i)`
+plus `nameCount` per array — a GLSL buffer cannot be aliased as an array
+variable, so an accessor it is, clamped to the array's ends. The
+declarations depend only on names and kinds (the *signature*), never on
+values or lengths, so a changing array never recompiles; the buffer is
+sized with headroom and the slot rebuilds only when a list outgrows it.
+The registry re-uploads when the packed values differ from the last
+upload and re-arms the node, which is how a static shader — one that
+reads no clock — redraws for a new envelope, a moved playhead or a
+changed gain.
+
+### The main dispatch queue was starved
+
+The first version of the example redrew on a drag but not when a
+background analysis finished. Not Observation's fault — the change
+handler fired whenever the write happened, and the write never happened:
+the `MainActor.run` (and, tried next, the `DispatchQueue.main.async`) that
+was to carry the result back sometimes never ran, while a
+`RunLoop.main.perform` always did. The `CADisplayLink` callback drew the
+frame in place, and a frame blocks the main thread for most of a display
+period waiting on vsync; a run loop whose display-link source is always
+ready and always slow does not get round to the main dispatch queue's
+port. Every `Task { @MainActor in … }` in any app on this stack was
+affected; the Pomodoro example only worked because a `Timer` is a
+run-loop source.
+
+`HostingWindow.onFrame` now queues one frame on the main dispatch queue
+(dropping ticks while one is pending) rather than drawing inside the
+callback. The display-link handler is then cheap, the loop always drains
+the queue, and the frame takes its FIFO turn with every other main-actor
+block. Verified with the example's Resample button — a detached task
+synthesising, `MainActor.run` storing, a GCD `concurrentPerform`
+reduction, `DispatchQueue.main.async` storing — 0 of 18 launches missing
+a redraw after the change, 8 of 12 before it. One more thing learned on
+the way: a `concurrentPerform` inside a detached task, which blocks a
+cooperative-pool thread, was seen to never start at all under the same
+starvation; the reduction runs on a GCD global queue, as SamplerUI's does.
+
+## 22. Light and dark
+
+Everything was written dark because nothing knew otherwise: `Color.primary`
+was a fixed near-white, and the window never asked the system. Now the
+window seeds `EnvironmentValues.colorScheme` from
+`NSApp.effectiveAppearance` and observes it (KVO) for the life of the
+window; a change rewrites the environment, paints the engine's clear
+color to the scheme's `Color.background`, and invalidates the tree.
+`AppRuntimeSettings.colorScheme` forces one for every window; iOS is
+seeded once from the trait collection and not yet tracked.
+
+A color can carry a second, dark set of components (`Color.dynamic`), and
+the semantic colors — `.primary`, `.secondary`, `.tertiary`,
+`.background`, `.secondaryBackground`, `.tertiaryBackground`,
+`.separator`, `.fill` — do. Resolution happens where a color is drawn:
+`DrawContext` carries the scheme, `resolve` picks the variant before
+applying opacity (gradient stops too), and `EnvironmentContent` — the
+node behind every `.environment` modifier — sets it on the way down, so
+`.colorScheme(_:)` on a subtree is honoured by leaves that never read the
+environment themselves. The root context takes the host's value. A
+`.color` shader argument is resolved when the argument list is packed,
+under the environment the view was built with, so the Sampler's shader
+paper follows too.
+
+Why draw time and not build time: the alternative — every leaf reading
+`\.colorScheme` at build and baking the variant in — would have touched
+every leaf and every gradient, and a `.shader` layer's canvas is drawn
+from the same display list, so the same `resolve` covers it for free.
+
+The demo got a System / Light / Dark control in its header (the root
+reads `@Environment(\.colorScheme)` for "System" and applies
+`.colorScheme` below itself), and every example's `Theme` became
+semantic or `dynamic`. Verified by flipping System Settings between the
+two with the demo on "System" (both repaints), by the demo's own control
+on the mixer and an effect screen, and by a light-mode pass over all
+seven examples.
+
+## 23. iOS, through an Xcode project
+
+The package declared `.iOS(.v17)` from the start and `HostingWindow` had
+an `#if os(iOS)` branch, but nothing had ever compiled it — the first
+iOS Simulator build failed on `ActiveScene`, which lives in
+`NucleantApplication` and was never imported. The launch path was a
+placeholder too: `AppRuntime.run()` on iOS called `onStart()` and
+returned, so `@main` would have presented onto no `UIApplication` and
+then exited.
+
+`run()` now hands the process to `UIApplicationMain`. Two things shaped
+the delegate:
+
+* `UIApplicationMain` instantiates the delegate *by class name*, and
+  `AppRuntime<A>` is generic — a generic Swift class has no ObjC name to
+  give it. So `_AppLaunchDelegate` is a plain class reached through a
+  static closure the runtime sets before the hand-off, the same shape
+  NucleantAppTest's launcher uses.
+* A window has to come from the connected `UIWindowScene`
+  (`UIWindow(windowScene:)`) or it never follows Stage Manager resizing,
+  and no scene exists yet in `didFinishLaunching`. The delegate answers
+  UIKit's `configurationForConnecting` with `_AppSceneDelegate`, which
+  stores the scene in `ActiveScene.current` and only then presents. The
+  configuration is built in code rather than named in Info.plist so the
+  app's plist never has to spell `NucleantSwiftUI._AppSceneDelegate`. An
+  app without a scene manifest still works — UIKit then never asks, and
+  `didFinishLaunching` presents onto a screen-sized frame.
+
+The project itself is xcodegen over the demo's existing source
+([XcodeExamples/](XcodeExamples)), one target with iOS and macOS
+destinations, depending on the checkout as a local package. Two things
+were not obvious: the package's own `NucleantSwiftUIDemo` executable gets
+an auto-created scheme with the same name as the app, so the app target
+is `NucleantSwiftUIDemoApp` and auto-creation is turned off in the
+workspace settings; and Xcode's "requires a development team" check for
+the macOS build reads the *unconditioned* `CODE_SIGN_IDENTITY` on the
+target, where xcodegen's application preset puts `"iPhone Developer"` —
+so the target signs to run locally by default and names `Apple
+Development` only for `[sdk=iphoneos*]`.
+
+Verified first on an iPhone 17 simulator (MoltenVK picks the simulator
+GPU, the full mixer renders) and as a macOS `.app` from the same project.
+
+### What the real GPU said
+
+The simulator proved nothing about the device: on an M1 iPad Pro the same
+build came up black. The frame loop was fine — acquire and present
+returned success every frame, one node was composited — and a debug
+readback of the wgpu `MTLTexture` after ThorVG's sync showed real pixels,
+so the drawing side was fine too. The only line differing between the
+logs was MoltenVK's `Descriptor sets binding resources using Metal3
+argument buffers` (the Intel Mac and the simulator say `Metal argument
+buffers`). Relaunching with `MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0`
+brought the picture up: through Metal 3 argument buffers the sampled
+image *imported* from an external `MTLTexture` is never made resident
+for the composite's fragment shader and reads as zero. The engine now
+turns argument buffers off per instance through `VK_EXT_layer_settings`
+— its descriptor sets are a handful of textures, so nothing is lost.
+
+Then no text: `FontRegistry` searched macOS directories for
+`Family Bold.ttf`. A probe of the device's `/System/Library/Fonts` showed
+iOS keeps fonts in `Core/`, `CoreUI/`, `WebFonts/`, `AppFonts/` under names
+without spaces, with Helvetica Neue and Menlo only as `.ttc` collections
+ThorVG cannot parse. Rather than a second table of guesses, the default
+and monospaced faces are now bundled (Roboto, Roboto Mono — Apache 2.0 /
+OFL, in `Resources/Fonts`, reached through `Bundle.module` on every
+platform), and anything else is asked of CoreText by family and traits,
+which returns the file on both OSes.
+
+Then no scrolling: `ScrollView` only had `onScroll`, fed by the wheel.
+`ViewHost` gained `scrollsOnDrag` — the iOS host sets it — under which a
+finger that moves more than 10 pt scrolls the innermost `ScrollView` it
+landed in. Priority follows UIKit: a target with drag handlers (a fader)
+keeps the finger; a press-only target (a button) gets `onRelease(inside:
+false)` and no tap once the scroll begins.
+
+Still open from the device run, in
+[XcodeExamples/plan.md](XcodeExamples/plan.md): the desktop layout is
+cramped on a phone, the navigation bar ignores the safe area, no scroll
+momentum, appearance seeded once.

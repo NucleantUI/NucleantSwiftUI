@@ -46,6 +46,9 @@ public final class HitTarget {
             || onDragChanged != nil || onDragEnded != nil
     }
     var handlesScroll: Bool { onScroll != nil }
+    /// A view that wants drag reports keeps a moving finger; one that only
+    /// wants taps yields it to a scroll view around it.
+    var takesDrags: Bool { onDragChanged != nil || onDragEnded != nil }
 }
 
 /// One node found under a point, with the point already mapped into its space.

@@ -58,6 +58,23 @@ public final class ViewHost {
     /// delta but no location on macOS.
     private var pointerLocation: Point = .zero
 
+    /// Whether a moving pointer scrolls the `ScrollView` under it. On for
+    /// touch hosts, where a finger is the only way to scroll; off for a mouse,
+    /// which scrolls with its wheel and drags only what asks for drags.
+    public var scrollsOnDrag = false
+
+    /// The innermost scrollable node under the touch that is in flight, and
+    /// whether that touch has turned into a scroll.
+    private var scrollTarget: HitResult?
+    private var isScrolling = false
+    private var touchStart: Point = .zero
+
+    /// How far a finger travels before it is a scroll rather than a tap that
+    /// wobbled. A drag-taking view (a fader) is never pre-empted by this; a
+    /// press-only one (a button) is released without its tap once the finger
+    /// is clearly scrolling, as UIKit does.
+    private static let scrollSlop = 10.0
+
     public init<Root: View>(root: Root) {
         self.root = AnyView(root)
     }
@@ -230,7 +247,7 @@ public final class ViewHost {
         node.place(
             in: Rect(origin: .zero, size: size),
             proposal: ProposedSize(size),
-            context: DrawContext(),
+            context: DrawContext(colorScheme: environment.colorScheme),
             into: &list
         )
         if LayoutTrace.isEnabled {
@@ -243,6 +260,11 @@ public final class ViewHost {
 
     public func pointerDown(at point: Point) {
         pointerLocation = point
+        touchStart = point
+        isScrolling = false
+        scrollTarget = scrollsOnDrag
+            ? rootNode?.hitTest(point, matching: { $0.handlesScroll })
+            : nil
         guard let hit = rootNode?.hitTest(point, matching: { $0.handlesPointer }) else {
             InputTrace.log("down \(point) — no target")
             activeGesture = nil
@@ -262,6 +284,8 @@ public final class ViewHost {
 
     public func pointerUp(at point: Point) {
         pointerLocation = point
+        scrollTarget = nil
+        isScrolling = false
         guard let gesture = activeGesture else {
             InputTrace.log("up \(point) — no gesture in flight")
             return
@@ -281,7 +305,31 @@ public final class ViewHost {
     }
 
     public func pointerMoved(to point: Point) {
+        let previous = pointerLocation
         pointerLocation = point
+
+        if isScrolling {
+            scrollTarget?.target.onScroll?(Point(x: point.x - previous.x, y: point.y - previous.y))
+            return
+        }
+        if let scrollTarget, activeGesture.map({ !$0.target.takesDrags }) ?? true {
+            let dx = point.x - touchStart.x
+            let dy = point.y - touchStart.y
+            if (dx * dx + dy * dy).squareRoot() >= Self.scrollSlop {
+                InputTrace.log("scroll begins at \(point)")
+                isScrolling = true
+                if let gesture = activeGesture {
+                    // The press was a scroll all along: let the view go
+                    // without a tap.
+                    gesture.target.onRelease?(gesture.localPoint(for: point) ?? gesture.localPoint, false)
+                    activeGesture = nil
+                    dragPassedThreshold = false
+                }
+                scrollTarget.target.onScroll?(Point(x: dx, y: dy))
+                return
+            }
+        }
+
         // Movement only means something to the gesture that is already in
         // flight: a drag must keep reporting to the view it started on, even
         // once the pointer has left that view's bounds.

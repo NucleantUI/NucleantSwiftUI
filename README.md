@@ -45,6 +45,17 @@ resolved from GitHub automatically; when they are checked out as siblings
 of this directory they are used from there instead (`NUCLEANT_LOCAL_DEV=0|1`
 overrides).
 
+[Examples/](Examples) has seven standalone apps built on the library — a
+calculator, a task list, a drawing pad, a dashboard, 2048, a pomodoro
+timer and a drum sampler — each its own package to copy from.
+
+The library also runs on iOS 17+ — verified on an M1 iPad Pro.
+[XcodeExamples/](XcodeExamples) has the demo as an Xcode project with iOS
+(device and simulator) and macOS destinations over the same sources;
+`@main struct DemoApp: NucleantApp` is the entry point on both platforms,
+and a finger scrolls `ScrollView`s and drives the same gestures a mouse
+does.
+
 ## Declaring a view: `@View`
 
 Write a struct with a `body` and put `@View` on it. The macro adds the
@@ -127,8 +138,66 @@ struct Mixer {
   row, not the other six.
 * `@Environment(\.font)`, `@Environment(\.foregroundColor)`, `\.tint`,
   `\.isEnabled`, `\.lineLimit`, `\.multilineTextAlignment`,
-  `\.displayScale`; set with `.environment(\.key, value)` or the sugar
-  (`.font`, `.foregroundColor`, `.tint`, `.disabled`, `.lineLimit`).
+  `\.displayScale`, `\.colorScheme`; set with `.environment(\.key, value)`
+  or the sugar (`.font`, `.foregroundColor`, `.tint`, `.disabled`,
+  `.lineLimit`, `.colorScheme`).
+
+### Light and dark
+
+The window seeds `\.colorScheme` from the system appearance and follows
+it as it changes. Colors can carry both appearances:
+
+```swift
+Color.primary, .secondary, .tertiary            // text
+Color.background, .secondaryBackground,          // window, panels,
+      .tertiaryBackground, .separator, .fill     // rows, hairlines, tracks
+Color.dynamic(light: Color(hex: 0xEEE4DA), dark: Color(hex: 0x4A5568))
+
+card.colorScheme(.dark)                          // fix a subtree
+AppRuntimeSettings.colorScheme = .dark           // fix every window, before main()
+```
+
+A dynamic color is resolved where it is drawn, against the scheme in
+effect there — so `.colorScheme(_:)` on a subtree flips everything inside
+it, navigation bar and `.shader` layers included, and a `.color` shader
+argument arrives resolved. A plain `Color(hex:)` is the same in both.
+The demo and every example have a System / Light / Dark switch
+(`Examples/*/Appearance.swift` is the whole control).
+
+### `@Observable` models
+
+A class marked `@Observable` (the standard library's) is read directly:
+
+```swift
+@MainActor @Observable
+final class Sample {
+    var gain: Double = 1
+    private(set) var envelope: [Float] = []
+    func analyse() {
+        Task.detached {
+            let result = reduce(…)
+            await MainActor.run { self.envelope = result }   // redraws the readers
+        }
+    }
+}
+
+@View
+struct GainControl {
+    @Bindable var sample: Sample          // or `let sample: Sample` when read-only
+
+    var body: some View {
+        Fader(level: $sample.gain)        // Binding<Double> straight into the object
+        Text("\(sample.envelope.count) points")
+    }
+}
+```
+
+Every property a view's `body` reads is tracked; a write to it — from a
+binding, a button, a timer, or a task coming back to the main actor —
+rebuilds that view on the next frame, and only that view. A view holding a
+reference to the same object is an unchanged input, so the object can be
+passed down freely; what changes inside it is caught by the tracking.
+`@Bindable` gives `$model.property` bindings by key path.
 
 ## Layout and views
 
@@ -140,6 +209,10 @@ struct Mixer {
 `.foregroundColor`, `.lineLimit`, `.multilineTextAlignment` — set on the
 `Text` or inherited from the environment. Fonts: `.system(size:weight:design:)`,
 `.custom(_:size:)`, the standard styles (`.title`, `.body`, `.footnote`, …).
+The default and monospaced designs are Roboto and Roboto Mono, bundled with
+the library so text is the same on every platform; `.serif` and
+`.custom` families are looked up on the system (through CoreText on Apple
+platforms), or registered from a file with `FontRegistry.register(path:as:)`.
 
 Shapes: `Rectangle`, `RoundedRectangle`, `Circle`, `Ellipse`, `Capsule`,
 `PathShape { size in … }`, with `.fill(_:)` / `.stroke(_:lineWidth:)` taking a
@@ -241,7 +314,30 @@ ShaderFunction(shaderToy: """
 ```
 
 with `iTime`, `iTimeDelta`, `iFrame`, `iResolution`, `iMouse` in ShaderToy's
-types and y-up coordinates. `iChannel` textures and screen-space derivatives
+types and y-up coordinates.
+
+### Arguments
+
+Values from Swift reach the body as named inputs — SwiftUI's
+`Shader.Argument`:
+
+```swift
+Shader(envelope, arguments: [
+    .floatArray("mins", negatives),       // float mins(int i); int minsCount;
+    .floatArray("maxs", positives),
+    .float("gain", sample.gain),          // float gain;
+    .color("tint", sample.color),         // vec4  tint;
+])
+```
+
+Scalars and vectors (`.float`, `.float2/3/4`, `.color`) are plain variables
+in the body; an array is read through `name(i)` with `nameCount` beside it
+(reads are clamped to the array, an empty one reads as zero). They live in
+a storage buffer, so an array can be long. A change to a value
+re-dispatches the shader — a shader that reads no clock is otherwise drawn
+once — while the *set* of names and kinds is part of the compiled
+pipeline, so keep that stable and vary the values. `.shader(_:arguments:)`
+takes the same list. The Sampler example draws a waveform this way. `iChannel` textures and screen-space derivatives
 (`fwidth`, `dFdx`) are not available — it is a compute shader, not a fragment
 one. A shader that does not compile fails with shaderc's message.
 `ShaderLibrary` ships eight ready-made ones.

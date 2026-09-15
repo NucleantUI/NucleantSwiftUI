@@ -19,6 +19,9 @@ struct TextContent: NodeContent {
 
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
         guard !string.isEmpty else { return }
+        // The half-point slack absorbs the difference between summed glyph
+        // advances here and ThorVG's own layout.
+        let fitsOneLine = TextMeasurer.width(of: string, font: font) <= rect.width + 0.5
         list.append(.text(TextDraw(
             string: string,
             frame: rect,
@@ -27,10 +30,11 @@ struct TextContent: NodeContent {
             alignment: alignment,
             lineLimit: lineLimit,
             // Only a single-line label can be ellipsised, and only when it
-            // really is too wide. The half-point slack absorbs the difference
-            // between summed glyph advances here and ThorVG's own layout.
-            isTruncated: lineLimit == 1
-                && TextMeasurer.width(of: string, font: font) > rect.width + 0.5,
+            // really is too wide.
+            isTruncated: lineLimit == 1 && !fitsOneLine,
+            // A string that fits one line is drawn as one line, whatever
+            // ThorVG's layout would make of the exact-fit box.
+            wraps: !fitsOneLine,
             transform: context.transform,
             clip: context.clip,
             clipCornerRadius: context.clipCornerRadius
@@ -73,12 +77,18 @@ struct ShapeContent: NodeContent {
 
 /// `Spacer` — takes every point the stack will give it along its axis.
 struct SpacerContent: NodeContent {
-    func flexibility(along axis: Axis) -> LayoutPriorityClass { .flexible }
-
     let minLength: Double
     /// Set by the stack when it places the spacer; `nil` outside a stack, where
     /// a spacer expands on both axes.
     let axis: Axis?
+
+    /// Flexible along its stack's axis, and nothing at all across it — a
+    /// spacer in an `HStack` has no height, so the row it is in must not
+    /// look vertically flexible to the stack around that row.
+    func flexibility(along axis: Axis, node: ViewNode) -> LayoutPriorityClass {
+        guard let own = self.axis else { return .flexible }
+        return axis == own ? .flexible : .fixed
+    }
 
     func sizeThatFits(_ proposal: ProposedSize, node: ViewNode) -> Size {
         var size = Size(width: minLength, height: minLength)

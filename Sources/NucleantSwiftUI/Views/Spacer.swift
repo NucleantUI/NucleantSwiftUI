@@ -47,7 +47,7 @@ struct DividerContent: NodeContent {
     let axis: Axis
     let color: Color
 
-    func flexibility(along axis: Axis) -> LayoutPriorityClass {
+    func flexibility(along axis: Axis, node: ViewNode) -> LayoutPriorityClass {
         axis == self.axis ? .fixed : .content
     }
 

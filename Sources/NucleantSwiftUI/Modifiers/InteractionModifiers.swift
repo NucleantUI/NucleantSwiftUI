@@ -43,7 +43,7 @@ extension View {
                 StateKey(path: context.path, propertyIndex: -1, viewType: ObjectIdentifier(OnAppearMarker.self)),
                 action
             )
-            return EnvironmentContent()
+            return EnvironmentContent(colorScheme: context.environment.colorScheme)
         }
     }
 }

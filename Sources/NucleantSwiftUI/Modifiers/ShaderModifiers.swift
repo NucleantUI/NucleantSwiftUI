@@ -32,18 +32,25 @@ extension View {
     ///
     /// `isEnabled: false` draws the view as usual, keeping its identity and
     /// state so an effect can be toggled without rebuilding what is under it.
-    public func shader(_ function: ShaderFunction, isEnabled: Bool = true) -> some View {
-        _ModifierView(content: self, key: ["shader", function, isEnabled] as [AnyHashable]) { context in
+    ///
+    /// `arguments` are the shader's named inputs — see `ShaderArgument`.
+    public func shader(
+        _ function: ShaderFunction,
+        arguments: [ShaderArgument] = [],
+        isEnabled: Bool = true
+    ) -> some View {
+        _ModifierView(content: self, key: ["shader", function, arguments, isEnabled] as [AnyHashable]) { context in
             ShaderEffectContent(
                 path: context.path,
-                function: isEnabled ? function : nil
+                function: isEnabled ? function : nil,
+                arguments: ShaderArguments(arguments, colorScheme: context.environment.colorScheme)
             )
         }
     }
 
     /// `shader(_:)` with the GLSL body inline.
-    public func shader(source: String, isEnabled: Bool = true) -> some View {
-        shader(ShaderFunction(source), isEnabled: isEnabled)
+    public func shader(source: String, arguments: [ShaderArgument] = [], isEnabled: Bool = true) -> some View {
+        shader(ShaderFunction(source), arguments: arguments, isEnabled: isEnabled)
     }
 }
 
@@ -55,6 +62,7 @@ struct ShaderEffectContent: NodeContent {
     let path: [Int]
     /// `nil` when disabled — the child then draws straight into the window.
     let function: ShaderFunction?
+    let arguments: ShaderArguments
 
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
         guard let child = node.singleChild else { return }
@@ -74,6 +82,7 @@ struct ShaderEffectContent: NodeContent {
         host.useLayer(
             path: path,
             function: function,
+            arguments: arguments,
             rect: rect,
             clip: context.clip,
             content: content

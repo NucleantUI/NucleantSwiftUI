@@ -43,6 +43,9 @@ final class ViewNode {
     /// is the *number* of proposals a long-lived node has seen (every window
     /// size during a drag-resize), hence the cap.
     private var measurements: [ProposedSize: Size] = [:]
+    /// `flexibility(along:)` walks the subtree; cached alongside the sizes
+    /// and dropped with them.
+    private var flexibilities: [Axis: LayoutPriorityClass] = [:]
 
     init(content: any NodeContent, children: [ViewNode] = []) {
         self.content = content
@@ -72,6 +75,7 @@ final class ViewNode {
         var node: ViewNode? = self
         while let current = node {
             current.measurements.removeAll(keepingCapacity: true)
+            current.flexibilities.removeAll(keepingCapacity: true)
             node = current.parent
         }
     }
@@ -92,6 +96,14 @@ final class ViewNode {
     /// SwiftUI would distribute the modifier over each. Worth knowing, but not
     /// worth a second layout mode — write the modifier inside the group.
     var singleChild: ViewNode? { layoutChildren.first }
+
+    /// How this node competes for space in a stack — see `NodeContent`.
+    func flexibility(along axis: Axis) -> LayoutPriorityClass {
+        if let cached = flexibilities[axis] { return cached }
+        let result = content.flexibility(along: axis, node: self)
+        flexibilities[axis] = result
+        return result
+    }
 
     func sizeThatFits(_ proposal: ProposedSize) -> Size {
         if let cached = measurements[proposal] { return cached }
@@ -158,8 +170,9 @@ protocol NodeContent {
 
     /// How eagerly this node consumes leftover space along `axis` — a stack
     /// sizes its least flexible children first so a greedy sibling can't
-    /// squeeze a `Text`.
-    func flexibility(along axis: Axis) -> LayoutPriorityClass
+    /// squeeze a `Text`. Takes the node so a wrapper can answer for what it
+    /// wraps and a stack for its children.
+    func flexibility(along axis: Axis, node: ViewNode) -> LayoutPriorityClass
 }
 
 extension NodeContent {
@@ -168,9 +181,13 @@ extension NodeContent {
     var isParked: Bool { false }
     var clipsChildren: Bool { false }
 
-    /// Most nodes are as flexible as whatever they wrap; only a `Spacer` (fully
-    /// flexible) and a fixed `.frame` (not at all) say otherwise.
-    func flexibility(along axis: Axis) -> LayoutPriorityClass { .content }
+    /// Most nodes are as flexible as whatever they wrap — a padded, tinted,
+    /// tappable fixed frame is still fixed. Only a `Spacer` (fully flexible),
+    /// a `.frame` (whatever it constrains to) and the stacks (their children)
+    /// say otherwise; a leaf with nothing inside is content-sized.
+    func flexibility(along axis: Axis, node: ViewNode) -> LayoutPriorityClass {
+        node.singleChild?.flexibility(along: axis) ?? .content
+    }
 
     /// Default sizing: pass the proposal through to the wrapped child, or take
     /// the whole proposal when there is nothing inside.
@@ -285,7 +302,12 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
     if let builtin = view as? BuiltinView {
         node = builtin.makeNode(&context)
     } else {
-        node = context.child(0) { sub in buildNode(view.body, &sub) }
+        // The body's `@Observable` reads belong to this view. Only the body
+        // itself is inside the scope — the child it returns is built after,
+        // in a scope of its own — so a change rebuilds from here, not from
+        // every ancestor that happened to be mid-build.
+        let body = trackingObservation(at: path) { view.body }
+        node = context.child(0) { sub in buildNode(body, &sub) }
     }
 
     // Remember how to rebuild exactly this view in exactly this position, and

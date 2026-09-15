@@ -125,6 +125,11 @@ public struct TextDraw: Equatable, Sendable {
     /// where the natural width is already known — asking the renderer to work
     /// it out would mean measuring the same string twice.
     public var isTruncated: Bool
+    /// False when the whole string fits the box on one line, so the renderer
+    /// must not wrap it: ThorVG's own layout can find a label a fraction
+    /// wider than the summed advances did, and would break a fitted single
+    /// line in two.
+    public var wraps: Bool
     public var transform: Transform
     public var clip: Rect?
     public var clipCornerRadius: Double
@@ -137,6 +142,7 @@ public struct TextDraw: Equatable, Sendable {
         alignment: TextAlignment = .leading,
         lineLimit: Int? = nil,
         isTruncated: Bool = false,
+        wraps: Bool = true,
         transform: Transform = .identity,
         clip: Rect? = nil,
         clipCornerRadius: Double = 0
@@ -148,6 +154,7 @@ public struct TextDraw: Equatable, Sendable {
         self.alignment = alignment
         self.lineLimit = lineLimit
         self.isTruncated = isTruncated
+        self.wraps = wraps
         self.transform = transform
         self.clip = clip
         self.clipCornerRadius = clipCornerRadius
@@ -184,20 +191,27 @@ public struct DrawContext: Sendable {
     public var transform: Transform = .identity
     public var clip: Rect?
     public var clipCornerRadius: Double = 0
+    /// The appearance dynamic colors resolve against here.
+    public var colorScheme: ColorScheme = .light
 
     public init() {}
 
-    /// `color` faded by the inherited opacity — every leaf applies this rather
-    /// than the renderer setting per-paint opacity, so gradients fade too.
+    public init(colorScheme: ColorScheme) {
+        self.colorScheme = colorScheme
+    }
+
+    /// `color` under this scheme, faded by the inherited opacity — every leaf
+    /// applies this rather than the renderer setting per-paint opacity, so
+    /// gradients fade too.
     func resolve(_ color: Color) -> Color {
-        opacity >= 1 ? color : color.opacity(opacity)
+        let resolved = color.resolved(for: colorScheme)
+        return opacity >= 1 ? resolved : resolved.opacity(opacity)
     }
 
     func resolve(_ style: ShapeStyle) -> ShapeStyle {
-        guard opacity < 1 else { return style }
         switch style {
         case .color(let color):
-            return .color(color.opacity(opacity))
+            return .color(resolve(color))
         case .linearGradient(let gradient, let start, let end):
             return .linearGradient(faded(gradient), startPoint: start, endPoint: end)
         case .radialGradient(let gradient, let center, let startRadius, let endRadius):
@@ -207,7 +221,7 @@ public struct DrawContext: Sendable {
 
     private func faded(_ gradient: Gradient) -> Gradient {
         Gradient(stops: gradient.stops.map {
-            Gradient.Stop(color: $0.color.opacity(opacity), location: $0.location)
+            Gradient.Stop(color: resolve($0.color), location: $0.location)
         })
     }
 

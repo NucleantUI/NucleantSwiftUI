@@ -63,6 +63,13 @@ func _dynamicallyEquivalent(_ a: Any, _ b: Any) -> Bool {
     if let a = a as? any ViewInput {
         return _openViewInput(a, b)
     }
+    // The same object is the same input: what a view reads *from* it is
+    // tracked by observation, so a change inside it dirties the readers
+    // without the reference having to look different. A different object
+    // is a different input, whatever its contents.
+    if type(of: a) is AnyClass {
+        return (a as AnyObject) === (b as AnyObject)
+    }
     return _equatableOrStructurallyEquivalent(a, b)
 }
 
@@ -90,9 +97,10 @@ private func _openEquatable<T: Equatable>(_ a: T, _ b: Any) -> Bool {
 /// Field-by-field through `Mirror`, for plain structs, tuples, optionals and
 /// collections that declare nothing. Stops at the first difference.
 ///
-/// What it refuses to decide: closures and classes (no `Mirror` children to
-/// speak of, and a class can mutate underneath), and enums without payloads —
-/// their `Mirror` is empty, so two different cases would look identical.
+/// What it refuses to decide: closures (nothing to compare) and enums
+/// without payloads — their `Mirror` is empty, so two different cases would
+/// look identical. Classes never reach here; they are compared by identity
+/// above.
 @MainActor
 private func _structurallyEquivalent(_ a: Any, _ b: Any) -> Bool {
     let ma = Mirror(reflecting: a)

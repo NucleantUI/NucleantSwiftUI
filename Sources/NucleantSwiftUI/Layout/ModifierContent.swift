@@ -17,12 +17,16 @@ struct FrameContent: NodeContent {
     let alignment: Alignment
 
     /// A frame with a hard extent on an axis is immovable there — the stack
-    /// must size it before anything that can stretch.
-    func flexibility(along axis: Axis) -> LayoutPriorityClass {
+    /// must size it before anything that can stretch. On an axis it says
+    /// nothing about, the child decides.
+    func flexibility(along axis: Axis, node: ViewNode) -> LayoutPriorityClass {
         let fixed = axis == .horizontal ? width : height
         if fixed != nil { return .fixed }
         let maximum = axis == .horizontal ? maxWidth : maxHeight
-        return maximum == .infinity ? .flexible : .content
+        if maximum == .infinity { return .flexible }
+        let minimum = axis == .horizontal ? minWidth : minHeight
+        if maximum != nil || minimum != nil { return .content }
+        return node.singleChild?.flexibility(along: axis) ?? .content
     }
 
     /// The proposal handed inward, the box this node reports outward, and the
@@ -324,6 +328,16 @@ struct InteractionContent: NodeContent {
 }
 
 /// `.environment(...)` and the sugar built on it (`.font`, `.foregroundColor`).
-/// Purely a build-time concern — by placement time the values are already baked
-/// into the leaves, so this node is a plain pass-through.
-struct EnvironmentContent: NodeContent {}
+/// Almost entirely a build-time concern — by placement time the values are
+/// baked into the leaves. The exception is the color scheme: dynamic colors
+/// are resolved as they are drawn, so the scheme rides on the draw context
+/// and is set here for the subtree.
+struct EnvironmentContent: NodeContent {
+    let colorScheme: ColorScheme
+
+    func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
+        var inner = context
+        inner.colorScheme = colorScheme
+        node.singleChild?.place(in: rect, proposal: proposal, context: inner, into: &list)
+    }
+}

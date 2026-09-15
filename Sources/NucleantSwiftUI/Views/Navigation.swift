@@ -138,9 +138,9 @@ public struct NavigationStack<Root: View>: View {
         .padding(horizontal: 12, vertical: 10)
         // A stable bar height, independent of what the title happens to be.
         .frame(maxWidth: .infinity, minHeight: 44)
-        .background(Color(white: 1, opacity: 0.06))
+        .background(Color.secondaryBackground)
         .overlay(alignment: .bottom) {
-            Color(white: 1, opacity: 0.10).frame(height: 1)
+            Color.separator.frame(height: 1)
         }
     }
 }

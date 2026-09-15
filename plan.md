@@ -98,6 +98,15 @@ replays as `Tvg_Paint`s. Rebuild happens on invalidation, not per frame.
 - [x] `@Binding`
 - [x] `@Environment` + `EnvironmentValues`
 - [x] Invalidation → rebuild on next frame
+- [x] `@Observable` models: `body` and `ForEach` rows run under
+      `withObservationTracking`, a change dirties that view's path; a same
+      object is an equivalent input; `@Bindable` for key-path bindings
+- [x] `\.colorScheme` seeded from the system and tracked (macOS; iOS
+      seeded once), `Color.dynamic(light:dark:)`, semantic colors with
+      both appearances, resolved at draw time under the subtree's scheme;
+      `.colorScheme(_:)`, `AppRuntimeSettings.colorScheme`
+- [x] `ShaderArgument` — named floats, vectors, colours and float arrays in
+      a storage buffer at binding 3; a value change re-dispatches
 - [x] `@View` macro: `View` conformance, call-site `ViewID` (stamped by
       `ViewBuilder`), generated `_isEquivalent(to:)` and static wrapper
       binding; subtrees whose view is equivalent are reused
@@ -175,7 +184,16 @@ why, and each shader slot built with its cost),
   closure.
 - No `GeometryReader` — `.relativeSize(width:height:)` covers the common case
   (an extent as a fraction of what the parent offered), and
-  `DragGesture.Value.bounds` covers the rest.
+  `DragGesture.Value.bounds` covers the rest. Note that in a stack "what
+  the parent offered" is the child's share, not the whole row: for a bar
+  that is a fraction of the full height put it in a `ZStack`, and for a
+  62/38 split give one side a `.frame(width:)`.
+- Stack sizing orders children by class (fixed, content, flexible), not
+  by measured flexibility as SwiftUI does. Content children get their
+  ideal extent when all of them fit and an equal share when they don't;
+  two long texts in one row therefore split the row equally rather than
+  by their minimum widths. Prefer `.frame(maxWidth: .infinity)` on the
+  one that should grow over a `Spacer` after it.
 - A shader with `iChannel` textures, screen-space derivatives (`fwidth`,
   `dFdx`) or `gl_FragCoord` will not compile — the target is a compute shader,
   not a fragment one.
@@ -201,6 +219,7 @@ why, and each shader slot built with its cost),
   drawing. Same metrics, so they agree, but they are not one code path.
 
 ## Later / not done
+- [x] Example apps (`Examples/`) — seven packages, PROCESS.md §20–21
 - [ ] Animation + transitions
 - [ ] `List`, `TabView`
 - [ ] Text input / focus

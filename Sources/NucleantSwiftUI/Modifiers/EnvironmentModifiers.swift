@@ -17,8 +17,17 @@ extension View {
             // always rebuild.
             key: (value as? AnyHashable).map { ["environment", AnyHashable(keyPath), $0] as [AnyHashable] },
             environment: { $0[keyPath: keyPath] = value },
-            node: { _ in EnvironmentContent() }
+            // The scheme in effect below this point, whether or not this is
+            // the modifier that set it: dynamic colors are resolved at draw
+            // time, so it has to travel with the draw context.
+            node: { context in EnvironmentContent(colorScheme: context.environment.colorScheme) }
         )
+    }
+
+    /// Fixes the appearance for this view and everything inside it,
+    /// whatever the system is set to.
+    public func colorScheme(_ scheme: ColorScheme) -> some View {
+        environment(\.colorScheme, scheme)
     }
 
     public func font(_ font: Font) -> some View {

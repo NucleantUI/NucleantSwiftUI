@@ -41,6 +41,11 @@ final class ShaderSlotRegistry {
         var height: Int
         /// Source it was compiled from; a change recompiles.
         var source: String
+        /// The argument names and kinds compiled in, and the values last
+        /// uploaded — a change to the former rebuilds, to the latter
+        /// re-uploads and re-dispatches.
+        var argumentSignature: String
+        var packedArguments: [Float] = []
         /// Whether the source reads the clock or the pointer. If not, one
         /// dispatch is all it needs until its input changes.
         let isAnimated: Bool
@@ -67,7 +72,8 @@ final class ShaderSlotRegistry {
             layer: Layer?,
             width: Int,
             height: Int,
-            function: ShaderFunction
+            function: ShaderFunction,
+            arguments: ShaderArguments
         ) {
             self.node = node
             self.container = container
@@ -76,6 +82,7 @@ final class ShaderSlotRegistry {
             self.width = width
             self.height = height
             self.source = function.source
+            self.argumentSignature = arguments.signature
             self.isAnimated = function.isAnimated
         }
     }
@@ -137,14 +144,21 @@ final class ShaderSlotRegistry {
 
     /// Called from `ShaderContent.place`: make sure a slot exists for this
     /// view, at this size, and put it at this rect.
-    func use(path: [Int], function: ShaderFunction, rect: Rect, clip: Rect?) {
-        _ = slot(at: path, function: function, rect: rect, clip: clip, withLayer: false)
+    func use(path: [Int], function: ShaderFunction, arguments: ShaderArguments, rect: Rect, clip: Rect?) {
+        _ = slot(at: path, function: function, arguments: arguments, rect: rect, clip: clip, withLayer: false)
     }
 
     /// Called from `ShaderEffectContent.place`: the slot for this view with
     /// `content` — what the view drew this pass — in its canvas.
-    func useLayer(path: [Int], function: ShaderFunction, rect: Rect, clip: Rect?, content: DisplayList) {
-        guard let slot = slot(at: path, function: function, rect: rect, clip: clip, withLayer: true),
+    func useLayer(
+        path: [Int],
+        function: ShaderFunction,
+        arguments: ShaderArguments,
+        rect: Rect,
+        clip: Rect?,
+        content: DisplayList
+    ) {
+        guard let slot = slot(at: path, function: function, arguments: arguments, rect: rect, clip: clip, withLayer: true),
               let layer = slot.layer
         else { return }
         // Absolute coordinates, so a view that merely moved reads as changed
@@ -163,7 +177,14 @@ final class ShaderSlotRegistry {
 
     /// The slot standing at `path`, rebuilt if its size or source changed,
     /// created if there is none; placed at `rect` either way.
-    private func slot(at path: [Int], function: ShaderFunction, rect: Rect, clip: Rect?, withLayer: Bool) -> Slot? {
+    private func slot(
+        at path: [Int],
+        function: ShaderFunction,
+        arguments: ShaderArguments,
+        rect: Rect,
+        clip: Rect?,
+        withLayer: Bool
+    ) -> Slot? {
         let source = function.source
         let pixelWidth = max(1, Int((rect.width * scale).rounded()))
         let pixelHeight = max(1, Int((rect.height * scale).rounded()))
@@ -173,13 +194,17 @@ final class ShaderSlotRegistry {
         if let existing = slots[path] {
             existing.used = true
             // Both rects are read fresh by the engine every frame, so moving or
-            // re-clipping a shader view is free; only a *resize* or a source
-            // change needs the GPU objects rebuilt.
+            // re-clipping a shader view is free; only a *resize*, a source
+            // change, or an argument list the buffer can't hold needs the GPU
+            // objects rebuilt.
             place(existing, rect: rect, clip: clip)
             if existing.width == pixelWidth,
                existing.height == pixelHeight,
                existing.source == source,
+               existing.argumentSignature == arguments.signature,
+               existing.pipeline.argumentCapacity >= arguments.packed.count,
                (existing.layer != nil) == withLayer {
+                upload(arguments, to: existing)
                 return existing
             }
             // Retire it the way `endPass` does — detach now, free at the top
@@ -204,6 +229,7 @@ final class ShaderSlotRegistry {
 
         guard let slot = makeSlot(
             function: function,
+            arguments: arguments,
             width: pixelWidth,
             height: pixelHeight,
             layer: withLayer ? .reuse(canvas) : .none
@@ -216,8 +242,18 @@ final class ShaderSlotRegistry {
             slot.frame = previous.frame
         }
         place(slot, rect: rect, clip: clip)
+        upload(arguments, to: slot)
         slots[path] = slot
         return slot
+    }
+
+    /// Hand the slot its argument values if they changed, and make it draw
+    /// again — a static shader's one dispatch was of the old values.
+    private func upload(_ arguments: ShaderArguments, to slot: Slot) {
+        guard !arguments.isEmpty, arguments.packed != slot.packedArguments else { return }
+        slot.pipeline.updateArguments(arguments.packed)
+        slot.packedArguments = arguments.packed
+        slot.container.needsRender = true
     }
 
     /// Point a slot at its frame, and at whatever its container allows it to
@@ -365,7 +401,13 @@ final class ShaderSlotRegistry {
         case reuse(Layer?)
     }
 
-    private func makeSlot(function: ShaderFunction, width: Int, height: Int, layer request: LayerRequest) -> Slot? {
+    private func makeSlot(
+        function: ShaderFunction,
+        arguments: ShaderArguments,
+        width: Int,
+        height: Int,
+        layer request: LayerRequest
+    ) -> Slot? {
         let started = PerfTrace.isVerbose ? DispatchTime.now().uptimeNanoseconds : 0
         let layer: Layer?
         let withLayer: Bool
@@ -399,6 +441,9 @@ final class ShaderSlotRegistry {
                 // owns the image and frees it.
                 node.register(image: layer.node.image, imageView: layer.node.imageView)
             }
+            // Room for half again as many floats as there are now, so an
+            // array that grows a little does not rebuild the slot each time.
+            let capacity = arguments.isEmpty ? 0 : max(256, arguments.packed.count * 3 / 2)
             let pipeline = try ShaderPipeline(
                 engine: engine,
                 imageView: image.view,
@@ -406,8 +451,10 @@ final class ShaderSlotRegistry {
                 source: ShaderSource.compute(
                     functions: function.functions,
                     body: function.body,
-                    samplesContent: layer != nil
-                )
+                    samplesContent: layer != nil,
+                    arguments: arguments
+                ),
+                argumentCapacity: capacity
             )
             node.computePipeline = pipeline.pipeline
             node.computeLayout = pipeline.pipelineLayout
@@ -430,7 +477,8 @@ final class ShaderSlotRegistry {
                 layer: layer,
                 width: width,
                 height: height,
-                function: function
+                function: function,
+                arguments: arguments
             )
         } catch {
             fputs("NucleantSwiftUI: shader node build (\(width)x\(height)) failed: \(error)\n", stderr)

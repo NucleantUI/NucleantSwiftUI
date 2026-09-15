@@ -24,6 +24,8 @@ import Platform_MacOS
 #if os(iOS)
 import UIKit
 import Platform_iOS
+// `ActiveScene` — the connected `UIWindowScene` the window attaches to.
+import NucleantApplication
 #endif
 
 public final class HostingWindow: NucleantWindow, @unchecked Sendable {
@@ -64,6 +66,12 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     /// Backing-store pixels per point. Layout is in points; the renderer scales.
     private var displayScale: Double = 1
 
+    #if os(macOS)
+    /// Follows the app's effective appearance — System Settings, or a
+    /// per-app override — for as long as the window lives.
+    private var appearanceObservation: NSKeyValueObservation?
+    #endif
+
 
     @MainActor
     public init<Root: View>(title: String, width: Double, height: Double, root: Root) {
@@ -84,6 +92,36 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
             throw HostingWindowError.unsupportedPlatform
             #endif
         }
+    }
+
+    /// The scheme the window shows: the app's override if it set one, else
+    /// what the system says.
+    @MainActor
+    private static func systemColorScheme() -> ColorScheme {
+        if let forced = AppRuntimeSettings.colorScheme { return forced }
+        #if os(macOS)
+        let match = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+        return match == .darkAqua ? .dark : .light
+        #elseif os(iOS)
+        return UITraitCollection.current.userInterfaceStyle == .dark ? .dark : .light
+        #else
+        return .light
+        #endif
+    }
+
+    /// Put `scheme` into the root environment, paint the window's clear
+    /// color to match, and rebuild everything — every dynamic color on
+    /// screen resolves differently now.
+    @MainActor
+    private func applyColorScheme(_ scheme: ColorScheme) {
+        guard host.environment.colorScheme != scheme || renderEngine.map({ $0.clearColor.a == 0 }) == true else { return }
+        host.environment.colorScheme = scheme
+        let background = Color.background.resolved(for: scheme)
+        renderEngine?.clearColor = (
+            Float(background.red), Float(background.green), Float(background.blue), 1
+        )
+        host.invalidate()
+        markNeedsRedraw()
     }
 
     #if os(macOS)
@@ -115,7 +153,16 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         // 3. One window-filling ThorVG node for the whole tree.
         attachCanvas(engine: engine, width: win_rect.z, height: win_rect.w)
 
-        // 4. Show it.
+        // 4. Light or dark, now and whenever the system changes its mind.
+        applyColorScheme(Self.systemColorScheme())
+        appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            // AppKit posts this on the main thread.
+            MainActor.assumeIsolated {
+                self?.applyColorScheme(Self.systemColorScheme())
+            }
+        }
+
+        // 5. Show it.
         platformWindow.title = title
         // A window built from a bare `contentRect` sits at the screen's
         // bottom-left corner (AppKit's origin), which on a multi-display setup
@@ -125,7 +172,7 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         platformWindow.makeKeyAndOrderFront(nil)
         platformWindow.makeFirstResponder(platformWindow.contentView)
 
-        // 5. Seed the size. AppKit posts `windowDidResize` only for actual
+        // 6. Seed the size. AppKit posts `windowDidResize` only for actual
         //    resizes, so without this the tree never learns how big it is.
         if let size = platformWindow.contentView?.bounds.size {
             on_size(w: Double(size.width), h: Double(size.height))
@@ -157,6 +204,10 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         self.platformWindow = platformWindow
         platformWindow.win_delegate = self
         displayScale = Double(platformWindow.metalLayer.contentsScale)
+        // A finger has no scroll wheel.
+        host.scrollsOnDrag = true
+        // Seeded once; a later appearance change is not tracked on iOS yet.
+        defer { applyColorScheme(Self.systemColorScheme()) }
 
         attachCanvas(engine: engine, width: win_rect.z, height: win_rect.w)
 
@@ -218,20 +269,49 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
 
     // MARK: - NucleantWindow
 
-    /// Per display-link tick: rebuild if anything invalidated, then let the
-    /// engine composite.
+    /// A frame already queued on the main dispatch queue and not yet run —
+    /// a display-link tick that arrives meanwhile is dropped, not stacked.
+    private var isFramePending = false
+
+    /// Per display-link tick: queue one frame on the main dispatch queue.
+    ///
+    /// Not drawn here, in the display link's own callback. A frame blocks
+    /// the main thread for most of a display period (the present waits for
+    /// the next vsync), and a run loop whose display-link source is always
+    /// ready and always slow never gets round to servicing the main
+    /// dispatch queue — so `DispatchQueue.main.async`, `Task { @MainActor
+    /// in … }` and `await MainActor.run` all sat unrun, sometimes for good,
+    /// while a run-loop `Timer` fired fine. Seen as an `@Observable` model
+    /// updated from a background analysis never redrawing. Queued through
+    /// the main queue instead, the frame takes its FIFO turn with every
+    /// other main-actor block, and the display-link callback is cheap
+    /// enough that the loop always drains the queue before the next tick.
     public func onFrame(_ dt: Double) {
         MainActor.assumeIsolated {
-            if host.update() {
-                markNeedsRedraw()
+            guard !isFramePending else { return }
+            isFramePending = true
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isFramePending = false
+                    self.renderFrame(dt)
+                }
             }
-            // Shaders are animated by definition: advance their clocks and
-            // re-arm them every frame. This is the one thing on screen that is
-            // never idle, and it is opt-in — a tree with no `Shader` view in it
-            // does nothing here.
-            shaderSlots?.tick(dt, pointer: pointerLocation)
-            renderEngine?.drawFrame(dt)
         }
+    }
+
+    /// Rebuild if anything invalidated, then let the engine composite.
+    @MainActor
+    private func renderFrame(_ dt: Double) {
+        if host.update() {
+            markNeedsRedraw()
+        }
+        // Shaders are animated by definition: advance their clocks and
+        // re-arm them every frame. This is the one thing on screen that is
+        // never idle, and it is opt-in — a tree with no `Shader` view in it
+        // does nothing here.
+        shaderSlots?.tick(dt, pointer: pointerLocation)
+        renderEngine?.drawFrame(dt)
     }
 
     /// Content resized to `w × h` **points**.

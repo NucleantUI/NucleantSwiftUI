@@ -118,6 +118,10 @@ private struct DisplayScaleKey: EnvironmentKey {
     static let defaultValue: Double = 1
 }
 
+private struct ColorSchemeKey: EnvironmentKey {
+    static let defaultValue = ColorScheme.light
+}
+
 extension EnvironmentValues {
     public var foregroundColor: Color {
         get { self[ForegroundColorKey.self] }
@@ -154,5 +158,12 @@ extension EnvironmentValues {
     public var displayScale: Double {
         get { self[DisplayScaleKey.self] }
         set { self[DisplayScaleKey.self] = newValue }
+    }
+
+    /// Light or dark. The window seeds it from the system and follows
+    /// changes; `.colorScheme(_:)` overrides it below that point.
+    public var colorScheme: ColorScheme {
+        get { self[ColorSchemeKey.self] }
+        set { self[ColorSchemeKey.self] = newValue }
     }
 }
