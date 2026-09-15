@@ -1,6 +1,15 @@
 {
-  "originHash" : "6ff11c7d481b2f6e2d8ca7e8dc5482f673674fa4e1b802a3d32be436527a8c1f",
+  "originHash" : "8a691a77fa29f10fd481e4c9a2e0c87a19839ba66849bdb26d1a190c914a2b28",
   "pins" : [
+    {
+      "identity" : "pyswiftast",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Py-Swift/PySwiftAST.git",
+      "state" : {
+        "branch" : "master",
+        "revision" : "c757b0d9e7975b59d3c670fea8a99b043e2cb4ba"
+      }
+    },
     {
       "identity" : "swift-syntax",
       "kind" : "remoteSourceControl",

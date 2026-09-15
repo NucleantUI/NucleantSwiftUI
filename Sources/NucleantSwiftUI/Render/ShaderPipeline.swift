@@ -22,6 +22,7 @@ import CVulkan
 import VulkanCore
 import NucleantVulkan
 import NucleantShader
+import PyShader
 
 /// What every shader gets for free, matching the `Uniforms` block the wrapper
 /// in `ShaderSource` declares. `std140` puts a `vec2` on an 8-byte boundary,
@@ -47,6 +48,58 @@ struct ShaderUniforms {
 enum ShaderError: Error {
     case compileFailed(String)
     case vulkan(String)
+}
+
+/// What a `ShaderFunction` becomes on its way to `vkCreateShaderModule`:
+/// GLSL still to be compiled by shaderc, or SPIR-V already produced by
+/// PyShader. Both target the descriptor layout described at the top of this
+/// file, so the pipeline is the same from here on.
+enum ShaderCode {
+    case glsl(String)
+    case spirv([UInt32])
+
+    /// The code for a function under the compute contract. `samplesContent`
+    /// adds the view's own pixels at binding 2 (`layer(uv)`); `arguments`
+    /// declares the `ShaderArgument`s at binding 3.
+    static func compute(
+        _ function: ShaderFunction,
+        samplesContent: Bool,
+        arguments: ShaderArguments
+    ) throws -> ShaderCode {
+        switch function.language {
+        case .glsl:
+            return .glsl(ShaderSource.compute(
+                functions: function.functions,
+                body: function.body,
+                samplesContent: samplesContent,
+                arguments: arguments
+            ))
+        case .pyshader:
+            let interface = ComputeImageInterface.nucleantSwiftUI(
+                samplesContent: samplesContent,
+                arguments: arguments.declarations.map { ($0.name, ShaderArgumentKind(glslType: $0.type)) }
+            )
+            do {
+                return .spirv(try PyShader.compile(function.body, target: .computeImage(interface)).spirv)
+            } catch let error as PyShaderError {
+                // Python line numbers, since that is what was written.
+                throw ShaderError.compileFailed("PyShader: \(error)")
+            }
+        }
+    }
+}
+
+extension ShaderArgumentKind {
+    /// From the GLSL declaration `ShaderArgument` produces for itself.
+    init(glslType: String) {
+        switch glslType {
+        case "float": self = .float
+        case "vec2": self = .float2
+        case "vec3": self = .float3
+        case "vec4": self = .float4
+        default: self = .floatArray
+        }
+    }
 }
 
 /// Wraps user GLSL into the compute contract above.
@@ -263,7 +316,7 @@ final class ShaderPipeline {
         engine: NucleantRenderEngine,
         imageView: VkImageView,
         input: VkImageView? = nil,
-        source: String,
+        source: ShaderCode,
         argumentCapacity: Int = 0
     ) throws {
         self.device = engine.device
@@ -280,15 +333,22 @@ final class ShaderPipeline {
             )
         }
 
-        guard let spirv = VKShaderCompiler.shared.tryCompileCompute(source) else {
-            uniforms.destroy(device: device)
-            arguments?.destroy(device: device)
-            // The real GLSL diagnostics, with the line numbers of the *wrapped*
-            // shader — which is what someone pasting a ShaderToy source needs
-            // to see rather than a bare "failed".
-            throw ShaderError.compileFailed(
-                VKShaderCompiler.shared.lastErrorMessage ?? "shaderc rejected the compute shader"
-            )
+        let spirv: [UInt32]
+        switch source {
+        case .spirv(let words):
+            spirv = words
+        case .glsl(let glsl):
+            guard let compiled = VKShaderCompiler.shared.tryCompileCompute(glsl) else {
+                uniforms.destroy(device: device)
+                arguments?.destroy(device: device)
+                // The real GLSL diagnostics, with the line numbers of the *wrapped*
+                // shader — which is what someone pasting a ShaderToy source needs
+                // to see rather than a bare "failed".
+                throw ShaderError.compileFailed(
+                    VKShaderCompiler.shared.lastErrorMessage ?? "shaderc rejected the compute shader"
+                )
+            }
+            spirv = compiled
         }
 
         do {

@@ -3,7 +3,7 @@
 //  NucleantSwiftUI
 //
 
-/// A GLSL fragment-style shader, compiled once and reused.
+/// A fragment-style shader, compiled once and reused.
 ///
 /// The body is written in the terms TouchBay's shader library uses — `uv`,
 /// `fragCoord`, `time`, `resolution` and `mouse` are in scope, and it assigns
@@ -21,21 +21,60 @@
 /// shader instead, and must declare `local_size_x = 8, local_size_y = 8` plus
 /// the bindings the wrapper would have (0: `writeonly image2D`, 1: the
 /// `Uniforms` block).
+///
+/// The same shader in Python syntax goes through `ShaderFunction(pyshader:)`
+/// and PyShader, which emits the SPIR-V directly — no GLSL, no shaderc.
 public struct ShaderFunction: Hashable, Sendable {
+
+    /// What the source is written in.
+    public enum Language: Hashable, Sendable {
+        /// GLSL 450, wrapped by `ShaderSource` and compiled by shaderc.
+        case glsl
+        /// PyShader's Python subset, compiled to SPIR-V by the PyShader package.
+        case pyshader
+    }
+
+    public let language: Language
 
     /// Declarations emitted at file scope, before `main` — helper functions,
     /// constants, structs. GLSL has no nested function definitions, so
     /// anything a body *calls* has to live here rather than in the body.
     /// TouchBay's shader library splits its sources the same way
-    /// (`FragShaderFunction(functions:main:)`).
+    /// (`FragShaderFunction(functions:main:)`). Always empty for PyShader,
+    /// whose source is one Python module.
     public let functions: String
 
-    /// The per-pixel body, inlined into `main`.
+    /// The per-pixel body, inlined into `main` — or, for PyShader, the whole
+    /// Python module.
     public let body: String
 
     public init(functions: String = "", _ body: String) {
+        self.language = .glsl
         self.functions = functions
         self.body = body
+    }
+
+    /// A shader written in Python syntax, compiled by PyShader.
+    ///
+    /// The module defines `def main(...) -> float4` and takes what it needs by
+    /// parameter name: `uv`, `frag_coord`, `pixel`, `time`, `time_delta`,
+    /// `frame`, `resolution`, `mouse`, `mouse_click`, plus every
+    /// `ShaderArgument` by its name (a `.floatArray` arrives as a `FloatArray`
+    /// — `a[i]` and `len(a)`). Under `.shader(_:)`, `layer(uv)` reads the
+    /// view's own pixels as it does in GLSL. Helper functions, module
+    /// constants and lambdas live in the same source:
+    ///
+    /// ```swift
+    /// let plasma = ShaderFunction(pyshader: """
+    ///     def main(uv: float2, time: float) -> float4:
+    ///         v = sin(uv.x * 10.0 + time) + sin((uv.y * 10.0 + time) * 0.5)
+    ///         return float4(float3(0.5 + 0.5 * sin(3.14159 * v)), 1.0)
+    /// """)
+    /// ```
+    public init(pyshader source: String) {
+        self.language = .pyshader
+        self.functions = ""
+        self.body = source
     }
 
     /// Wraps an unmodified ShaderToy shader.
@@ -62,13 +101,18 @@ public struct ShaderFunction: Hashable, Sendable {
     /// `gl_FragCoord` is likewise absent — `mainImage`'s own `fragCoord`
     /// parameter carries the same value.
     public init(shaderToy source: String) {
+        self.language = .glsl
         self.functions = source
         self.body = "mainImage(fragColor, fragCoord);"
     }
 
     /// Identity for the compiled-pipeline cache: both halves, since either
-    /// changing means a recompile.
-    var source: String { functions.isEmpty ? body : functions + "\n" + body }
+    /// changing means a recompile — and the language, since the same text
+    /// means different things in each.
+    var source: String {
+        let text = functions.isEmpty ? body : functions + "\n" + body
+        return language == .pyshader ? "#pyshader\n" + text : text
+    }
 
     /// Whether the shader reads anything that changes between frames.
     ///
@@ -78,7 +122,11 @@ public struct ShaderFunction: Hashable, Sendable {
     /// textual test, so a helper that takes `time` as a parameter counts too;
     /// erring towards "animated" only costs dispatches.
     var isAnimated: Bool {
-        let clocks: Set<Substring> = ["time", "iTime", "iTimeDelta", "iFrame", "mouse", "iMouse"]
+        let clocks: Set<Substring> = [
+            "time", "iTime", "iTimeDelta", "iFrame", "mouse", "iMouse",
+            // PyShader's spellings of the same inputs.
+            "time_delta", "frame", "mouse_click",
+        ]
         var identifier = Substring()
         for character in source {
             if character.isLetter || character.isNumber || character == "_" {

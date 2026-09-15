@@ -23,13 +23,13 @@ let localDev: Bool = {
     return FileManager.default.fileExists(atPath: siblings.appendingPathComponent("NucleantVulkan").path)
 }()
 
-/// The three Nucleant packages this one is built on, from wherever
+/// The Nucleant packages this one is built on, from wherever
 /// `localDev` says. Product names and `package:` identities are the same
 /// either way — SwiftPM derives a path dependency's identity from the
 /// directory name and a URL dependency's from the repository name, and those
 /// match — so the targets below never need to know which source is in use.
 func nucleantDependencies() -> [Package.Dependency] {
-    let repos = ["NucleantVulkan", "NucleantThorVG", "NucleantApplication"]
+    let repos = ["NucleantVulkan", "NucleantThorVG", "NucleantApplication", "PyShader"]
     return repos.map { name in
         localDev
             ? .package(path: "../\(name)")
@@ -68,6 +68,7 @@ let package = Package(
                 "NucleantSwiftUIMacros",
                 .product(name: "NucleantVulkan", package: "NucleantVulkan"),
                 .product(name: "NucleantShader", package: "NucleantVulkan"),
+                .product(name: "PyShader", package: "PyShader"),
                 .product(name: "NucleantThorVG", package: "NucleantThorVG"),
                 .product(name: "NucleantApplication", package: "NucleantApplication"),
                 .product(name: "NucleantWindow", package: "NucleantApplication"),

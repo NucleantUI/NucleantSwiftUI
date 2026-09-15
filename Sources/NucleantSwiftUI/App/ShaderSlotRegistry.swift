@@ -343,11 +343,12 @@ final class ShaderSlotRegistry {
         for slot in slots.values {
             slot.elapsed += delta
             slot.frame += 1
-            // The pointer in the view's own pixels, the space `resolution`
-            // describes — ShaderToy's `iMouse` contract.
+            // One pointer for every shader, in window pixels: two shaders
+            // side by side read the same value and stay in step with each
+            // other, which per-view coordinates never did.
             let local = Point(
-                x: (pointer.x - slot.rect.minX) * scale,
-                y: (pointer.y - slot.rect.minY) * scale
+                x: pointer.x * scale,
+                y: pointer.y * scale
             )
             slot.pipeline.update(ShaderUniforms(
                 time: Float(slot.elapsed),
@@ -448,9 +449,8 @@ final class ShaderSlotRegistry {
                 engine: engine,
                 imageView: image.view,
                 input: layer?.node.imageView,
-                source: ShaderSource.compute(
-                    functions: function.functions,
-                    body: function.body,
+                source: try ShaderCode.compute(
+                    function,
                     samplesContent: layer != nil,
                     arguments: arguments
                 ),
