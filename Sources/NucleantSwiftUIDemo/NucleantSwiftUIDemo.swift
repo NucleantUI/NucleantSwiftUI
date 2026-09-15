@@ -8,12 +8,40 @@
 
 import NucleantSwiftUI
 
+/// The demo's colors. Surfaces are the framework's semantic colors, which
+/// have a light and a dark appearance each; the accents are fixed and read
+/// on both. `muted` is a button tint for secondary actions — white text
+/// needs a darker grey under it in light mode than in dark.
 struct Palette {
-    static let panel = Color(hex: 0x1C1F26)
-    static let panelHighlight = Color(hex: 0x272B34)
+    static let background = Color.background
+    static let panel = Color.secondaryBackground
+    static let panelHighlight = Color.tertiaryBackground
+    static let track = Color.fill
+    static let muted = Color.dynamic(light: Color(white: 0.55), dark: Color(white: 0.3))
     static let accent = Color(hex: 0x4C8DFF)
     static let good = Color(hex: 0x3DD68C)
     static let warn = Color(hex: 0xFFB020)
+}
+
+/// What the Appearance control offers: follow the system, or force one.
+enum Appearance: CaseIterable {
+    case system, light, dark
+
+    var name: String {
+        switch self {
+        case .system: return "System"
+        case .light:  return "Light"
+        case .dark:   return "Dark"
+        }
+    }
+
+    var scheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
 }
 
 struct Track: Identifiable {
@@ -67,7 +95,7 @@ struct TrackRow {
     var fader: some View {
         ZStack(alignment: .leading) {
             Capsule()
-                .fill(Color(white: 1, opacity: 0.08))
+                .fill(Palette.track)
                 .frame(height: 8)
 
             Capsule()
@@ -275,7 +303,7 @@ struct EffectScreen {
                     .foregroundColor(.secondary)
                 Spacer()
                 Button(isEnabled ? "Effect on" : "Effect off") { isEnabled.toggle() }
-                    .tint(isEnabled ? Palette.accent : Color(white: 0.3))
+                    .tint(isEnabled ? Palette.accent : Palette.muted)
             }
 
             VStack(spacing: 8) {
@@ -329,8 +357,33 @@ struct Counter {
     }
 }
 
+/// System / Light / Dark. A segmented control from tap targets — the
+/// selected segment takes the tint, the others the panel color.
+@View
+struct AppearancePicker {
+    @Binding var appearance: Appearance
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Appearance.allCases, id: \.self) { choice in
+                Text(choice.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(appearance == choice ? .white : .secondary)
+                    .padding(horizontal: 10, vertical: 5)
+                    .background(appearance == choice ? Palette.accent : Color.clear)
+                    .cornerRadius(6)
+                    .onTapGesture { appearance = choice }
+            }
+        }
+        .padding(2)
+        .background(Palette.panelHighlight)
+        .cornerRadius(8)
+    }
+}
+
 @View
 struct ContentView {
+    @Binding var appearance: Appearance
     @State private var showDetails = true
     @State private var tracks = defaultTracks
 
@@ -348,7 +401,7 @@ struct ContentView {
                 .tint(Palette.accent)
 
                 Button("Reset") { tracks = defaultTracks }
-                    .tint(Color(white: 0.3))
+                    .tint(Palette.muted)
 
                 NavigationLink("Shaders") { ShaderGalleryScreen() }
 
@@ -389,7 +442,7 @@ struct ContentView {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(hex: 0x11141A))
+        .background(Palette.background)
     }
 
     var header: some View {
@@ -411,7 +464,27 @@ struct ContentView {
             }
 
             Spacer()
+
+            AppearancePicker(appearance: $appearance)
         }
+    }
+}
+
+/// The root: owns the appearance choice and applies it under itself, so
+/// the whole tree — navigation bar included — resolves its colors against
+/// the chosen scheme. "System" hands down what the window was seeded with,
+/// which follows System Settings as it changes.
+@View
+struct RootView {
+    @State private var appearance = Appearance.system
+    @Environment(\.colorScheme) private var system
+
+    var body: some View {
+        NavigationStack("Nucleant Mixer") {
+            ContentView(appearance: $appearance)
+        }
+        .background(Palette.background)
+        .colorScheme(appearance.scheme ?? system)
     }
 }
 
@@ -419,10 +492,7 @@ struct ContentView {
 struct DemoApp: NucleantApp {
     var body: some Scene {
         WindowGroup("Nucleant SwiftUI Demo", width: 900, height: 620) {
-            NavigationStack("Nucleant Mixer") {
-                ContentView()
-            }
-            .background(Color(hex: 0x11141A))
+            RootView()
         }
     }
 }
