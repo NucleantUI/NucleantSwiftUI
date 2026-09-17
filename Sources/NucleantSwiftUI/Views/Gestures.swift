@@ -17,6 +17,12 @@ public struct DragGesture {
     /// The state of a drag at one moment. `startLocation`, `location` and
     /// `translation` match SwiftUI's; `bounds` does not exist there.
     public struct Value {
+        /// Which pointer this is: stable for the life of one finger on a
+        /// touch host, so a view under several can tell them apart. A mouse
+        /// is always 0.
+        ///
+        /// Not a SwiftUI field — there, one `DragGesture` sees one finger.
+        public var id: Int
         /// Where the drag began, in the gesture view's own coordinates.
         public var startLocation: Point
         /// Where the pointer is now, in the same space.

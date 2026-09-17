@@ -28,9 +28,12 @@ text input or timer API in the framework yet: "Add" in Tasks pulls from a
 backlog instead of a text field; Pomodoro schedules its own `Timer` and
 writes state from it, which the next frame picks up like any other write.
 
-Every example has a System / Light / Dark switch — the same `Appearance.swift`
-in each package: an enum, a segmented picker built from tap targets, and
-the root view applying `.colorScheme(appearance.scheme ?? system)` under
+Every example has a System / Light / Dark switch in its View menu — the
+same `Appearance.swift` in each package: an enum, an `@Observable`
+`AppearanceModel` the menu writes to, `AppearanceCommands` (a `Commands`
+with one `CommandMenu`, attached to the `WindowGroup` with
+`.commands { AppearanceCommands() }`), and the root view applying
+`.colorScheme(AppearanceModel.shared.appearance.scheme ?? system)` under
 itself, where `system` is `@Environment(\.colorScheme)` (what the window
 was seeded with, following System Settings). The themes use the
 framework's semantic colors or `Color.dynamic(light:dark:)`, so a plain

@@ -178,15 +178,10 @@ struct Key {
 @View
 struct CalculatorView {
     @State private var calc = Calculator()
-    @State private var appearance = Appearance.system
     @Environment(\.colorScheme) private var system
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack {
-                AppearancePicker(appearance: $appearance)
-                Spacer()
-            }
             display
             row {
                 Key(label: "AC", style: .function) { calc.clear() }
@@ -219,7 +214,7 @@ struct CalculatorView {
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
-        .colorScheme(appearance.scheme ?? system)
+        .colorScheme(AppearanceModel.shared.appearance.scheme ?? system)
     }
 
     var display: some View {
@@ -258,5 +253,6 @@ struct CalculatorApp: NucleantApp {
         WindowGroup("Calculator", width: 360, height: 600) {
             CalculatorView()
         }
+        .commands { AppearanceCommands() }
     }
 }

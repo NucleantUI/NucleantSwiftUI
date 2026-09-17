@@ -8,6 +8,8 @@
 //  (see `ViewNode.isTransparent`).
 //
 
+import NucleantWindow
+
 /// A view that displays nothing.
 public struct EmptyView: View {
     public init() {}
@@ -116,9 +118,12 @@ public struct AnyView: View {
     /// concrete type stay out of `AnyView`'s own signature while the node
     /// builder still sees it.
     let makeErasedNode: @MainActor (inout BuildContext) -> ViewNode
+    /// The same, for the erased value's menu rows (see `MenuItems.swift`).
+    let lowerMenuItems: @MainActor (inout MenuLowering) -> [MenuBar.Item]
 
     public init<V: View>(_ view: V) {
         self.makeErasedNode = { context in buildNode(view, &context) }
+        self.lowerMenuItems = { lowering in menuItems(of: view, &lowering) }
     }
 
     public var body: Never { bodyUnavailable() }

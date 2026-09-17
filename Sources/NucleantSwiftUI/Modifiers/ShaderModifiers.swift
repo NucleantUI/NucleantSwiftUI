@@ -33,24 +33,38 @@ extension View {
     /// `isEnabled: false` draws the view as usual, keeping its identity and
     /// state so an effect can be toggled without rebuilding what is under it.
     ///
+    /// `backdrop: true` draws what was already painted under this view's
+    /// rect — everything earlier in paint order, in the same window or
+    /// layer — into the texture before the view itself, so `layer(uv)`
+    /// reads the view *and its background*: a glass or blur over whatever is
+    /// beneath. The window's clear colour and other shader nodes are not
+    /// paint, so they are not in it.
+    ///
     /// `arguments` are the shader's named inputs — see `ShaderArgument`.
     public func shader(
         _ function: ShaderFunction,
         arguments: [ShaderArgument] = [],
+        backdrop: Bool = false,
         isEnabled: Bool = true
     ) -> some View {
-        _ModifierView(content: self, key: ["shader", function, arguments, isEnabled] as [AnyHashable]) { context in
+        _ModifierView(content: self, key: ["shader", function, arguments, backdrop, isEnabled] as [AnyHashable]) { context in
             ShaderEffectContent(
                 path: context.path,
                 function: isEnabled ? function : nil,
-                arguments: ShaderArguments(arguments, colorScheme: context.environment.colorScheme)
+                arguments: ShaderArguments(arguments, colorScheme: context.environment.colorScheme),
+                backdrop: backdrop
             )
         }
     }
 
     /// `shader(_:)` with the GLSL body inline.
-    public func shader(source: String, arguments: [ShaderArgument] = [], isEnabled: Bool = true) -> some View {
-        shader(ShaderFunction(source), arguments: arguments, isEnabled: isEnabled)
+    public func shader(
+        source: String,
+        arguments: [ShaderArgument] = [],
+        backdrop: Bool = false,
+        isEnabled: Bool = true
+    ) -> some View {
+        shader(ShaderFunction(source), arguments: arguments, backdrop: backdrop, isEnabled: isEnabled)
     }
 }
 
@@ -63,6 +77,8 @@ struct ShaderEffectContent: NodeContent {
     /// `nil` when disabled — the child then draws straight into the window.
     let function: ShaderFunction?
     let arguments: ShaderArguments
+    /// Seed the layer with what is already painted under the view.
+    let backdrop: Bool
 
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
         guard let child = node.singleChild else { return }
@@ -77,7 +93,10 @@ struct ShaderEffectContent: NodeContent {
         var inner = context
         inner.clip = nil
         inner.clipCornerRadius = 0
-        var content = DisplayList()
+        // The list so far is everything painted beneath this view; the
+        // layer's canvas is only the view's rect, so the rest is clipped
+        // away by ThorVG.
+        var content = backdrop ? list : DisplayList()
         child.place(in: rect, proposal: proposal, context: inner, into: &content)
         host.useLayer(
             path: path,

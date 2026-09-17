@@ -206,7 +206,6 @@ struct ScoreBox {
 @View
 struct GameView {
     @State private var board = Board.fresh()
-    @State private var appearance = Appearance.system
     @Environment(\.colorScheme) private var system
 
     var body: some View {
@@ -220,7 +219,6 @@ struct GameView {
             HStack {
                 Text(status).font(.footnote).foregroundColor(.secondary)
                 Spacer()
-                AppearancePicker(appearance: $appearance)
             }
             .frame(width: 400)
 
@@ -238,7 +236,7 @@ struct GameView {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
-        .colorScheme(appearance.scheme ?? system)
+        .colorScheme(AppearanceModel.shared.appearance.scheme ?? system)
     }
 
     var status: String {
@@ -265,5 +263,6 @@ struct TwentyFortyEightApp: NucleantApp {
         WindowGroup("2048", width: 460, height: 660) {
             GameView()
         }
+        .commands { AppearanceCommands() }
     }
 }

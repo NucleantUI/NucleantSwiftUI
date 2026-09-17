@@ -42,20 +42,28 @@ public final class ViewHost {
     /// Forces the next `update()` to rebuild from the root.
     private var needsFullRebuild = true
 
-    /// The gesture in flight between a press and its release. Held rather than
-    /// re-hit-tested on release, so dragging off a button reaches the button
-    /// that was actually pressed — and so a drag keeps reporting to its own
-    /// view after the pointer has left it.
-    private var activeGesture: HitResult?
+    /// A press in flight, from its pointer going down to its release. Held
+    /// rather than re-hit-tested on release, so dragging off a button reaches
+    /// the button that was actually pressed — and so a drag keeps reporting
+    /// to its own view after the pointer has left it.
+    private struct PressedGesture {
+        var hit: HitResult
+        /// Where it began, in the gesture view's own space.
+        var start: Point
+        /// Whether the pointer has moved far enough for a drag to start reporting.
+        var passedThreshold: Bool
+    }
 
-    /// Where the in-flight gesture began, in the gesture view's own space.
-    private var gestureStart: Point = .zero
+    /// The presses in flight, by pointer id — every finger on a touch host
+    /// gets its own; a mouse is always pointer 0.
+    private var gestures: [Int: PressedGesture] = [:]
 
-    /// Whether the pointer has moved far enough for a drag to start reporting.
-    private var dragPassedThreshold = false
+    /// The pointer that scrolls, drags a `.draggable` or holds for a context
+    /// menu: the first one down. Later fingers only press and drag-gesture.
+    private var primaryPointer: Int?
 
-    /// The last pointer position, in view coordinates — scroll events carry a
-    /// delta but no location on macOS.
+    /// The last primary pointer position, in view coordinates — scroll events
+    /// carry a delta but no location on macOS.
     private var pointerLocation: Point = .zero
 
     /// The drag in flight, once a press on a `.draggable` has moved far
@@ -300,136 +308,170 @@ public final class ViewHost {
 
     // MARK: - Input
 
-    public func pointerDown(at point: Point) {
-        pointerLocation = point
-        touchStart = point
-        isScrolling = false
-        pressSerial += 1
-        scrollTarget = scrollsOnDrag
-            ? rootNode?.hitTest(point, matching: { $0.handlesScroll })
-            : nil
-        dragSourceHit = rootNode?.hitTest(point) { $0.content.dragSource }
-        contextMenuHit = opensContextMenuOnLongPress
-            ? rootNode?.hitTest(point) { $0.content.contextMenuSource }
-            : nil
-        if contextMenuHit != nil || (dragSourceHit != nil && scrollTarget != nil) {
-            // A finger resting on a view with a menu opens it; on a
-            // draggable row of a list, moving scrolls and resting drags.
-            // The timer is the rest.
-            let serial = pressSerial
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.dragHoldDelay) { [weak self] in
-                MainActor.assumeIsolated { self?.holdElapsed(serial) }
+    public func pointerDown(id: Int = 0, at point: Point) {
+        if primaryPointer == nil {
+            primaryPointer = id
+            pointerLocation = point
+            touchStart = point
+            isScrolling = false
+            pressSerial += 1
+            scrollTarget = scrollsOnDrag
+                ? rootNode?.hitTest(point, matching: { $0.handlesScroll })
+                : nil
+            dragSourceHit = rootNode?.hitTest(point) { $0.content.dragSource }
+            contextMenuHit = opensContextMenuOnLongPress
+                ? rootNode?.hitTest(point) { $0.content.contextMenuSource }
+                : nil
+            if contextMenuHit != nil || (dragSourceHit != nil && scrollTarget != nil) {
+                // A finger resting on a view with a menu opens it; on a
+                // draggable row of a list, moving scrolls and resting drags.
+                // The timer is the rest.
+                let serial = pressSerial
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.dragHoldDelay) { [weak self] in
+                    MainActor.assumeIsolated { self?.holdElapsed(serial) }
+                }
             }
         }
         guard let hit = rootNode?.hitTest(point, matching: { $0.handlesPointer }) else {
-            InputTrace.log("down \(point) — no target")
-            activeGesture = nil
+            InputTrace.log("down \(id) \(point) — no target")
+            gestures[id] = nil
             return
         }
-        InputTrace.log("down \(point) — hit \(hit.frame)")
-        activeGesture = hit
-        gestureStart = hit.localPoint
-        dragPassedThreshold = hit.target.minimumDragDistance <= 0
+        InputTrace.log("down \(id) \(point) — hit \(hit.frame)")
+        let gesture = PressedGesture(
+            hit: hit,
+            start: hit.localPoint,
+            passedThreshold: hit.target.minimumDragDistance <= 0
+        )
+        gestures[id] = gesture
         hit.target.onPress?(hit.localPoint)
         // A zero-threshold drag reports on press as well, so tapping a fader
         // jumps it to where you touched instead of waiting for movement.
-        if dragPassedThreshold {
-            reportDrag(gesture: hit, at: hit.localPoint, ended: false)
+        if gesture.passedThreshold {
+            reportDrag(id: id, gesture: gesture, at: hit.localPoint, ended: false)
         }
     }
 
-    public func pointerUp(at point: Point) {
+    public func pointerUp(id: Int = 0, at point: Point) {
+        if id == primaryPointer {
+            releasePrimary(at: point)
+            if let session = dragSession {
+                dragSession = nil
+                let taken = session.drop(at: point, in: rootNode)
+                InputTrace.log("drop \(session.payload.itemName) at \(point) — \(taken ? "taken" : "not taken")")
+                needsRepaint = true
+                return
+            }
+        }
+        guard let gesture = gestures.removeValue(forKey: id) else {
+            InputTrace.log("up \(id) \(point) — no gesture in flight")
+            return
+        }
+        let inside = gesture.hit.contains(point)
+        InputTrace.log("up \(id) \(point) — inside \(inside)")
+        let local = gesture.hit.localPoint(for: point) ?? gesture.hit.localPoint
+        if gesture.passedThreshold {
+            reportDrag(id: id, gesture: gesture, at: local, ended: true)
+        }
+        gesture.hit.target.onRelease?(local, inside)
+        if inside {
+            gesture.hit.target.onTap?(local)
+        }
+    }
+
+    /// The system took the pointer away (a system gesture, an incoming call):
+    /// let its view go without a tap, and drop any drag preview on the floor.
+    public func pointerCancelled(id: Int = 0, at point: Point) {
+        if id == primaryPointer {
+            releasePrimary(at: point)
+            if let session = dragSession {
+                dragSession = nil
+                InputTrace.log("drag cancelled — \(session.payload.itemName)")
+                needsRepaint = true
+            }
+        }
+        guard let gesture = gestures.removeValue(forKey: id) else { return }
+        InputTrace.log("cancel \(id) \(point)")
+        let local = gesture.hit.localPoint(for: point) ?? gesture.hit.localPoint
+        if gesture.passedThreshold {
+            reportDrag(id: id, gesture: gesture, at: local, ended: true)
+        }
+        gesture.hit.target.onRelease?(local, false)
+    }
+
+    /// The primary pointer is gone: nothing scrolls, holds or drags until the
+    /// next one goes down.
+    private func releasePrimary(at point: Point) {
+        primaryPointer = nil
         pointerLocation = point
         pressSerial += 1
         scrollTarget = nil
         isScrolling = false
         dragSourceHit = nil
         contextMenuHit = nil
-        if let session = dragSession {
-            dragSession = nil
-            let taken = session.drop(at: point, in: rootNode)
-            InputTrace.log("drop \(session.payload.itemName) at \(point) — \(taken ? "taken" : "not taken")")
-            needsRepaint = true
-            return
-        }
-        guard let gesture = activeGesture else {
-            InputTrace.log("up \(point) — no gesture in flight")
-            return
-        }
-        InputTrace.log("up \(point) — inside \(gesture.contains(point))")
-        activeGesture = nil
-        let inside = gesture.contains(point)
-        let local = gesture.localPoint(for: point) ?? gesture.localPoint
-        if dragPassedThreshold {
-            reportDrag(gesture: gesture, at: local, ended: true)
-        }
-        dragPassedThreshold = false
-        gesture.target.onRelease?(local, inside)
-        if inside {
-            gesture.target.onTap?(local)
-        }
     }
 
-    public func pointerMoved(to point: Point) {
-        let previous = pointerLocation
-        pointerLocation = point
+    public func pointerMoved(id: Int = 0, to point: Point) {
+        // A hovering mouse has no press in flight but still moves the
+        // location that a scroll wheel event lands on.
+        if primaryPointer == nil || primaryPointer == id {
+            let previous = pointerLocation
+            pointerLocation = point
 
-        if let session = dragSession {
-            session.move(to: point, in: rootNode)
-            needsRepaint = true
-            return
-        }
-        if isScrolling {
-            scrollTarget?.target.onScroll?(Point(x: point.x - previous.x, y: point.y - previous.y))
-            return
-        }
-        if let scrollTarget, activeGesture.map({ !$0.target.takesDrags }) ?? true {
-            let dx = point.x - touchStart.x
-            let dy = point.y - touchStart.y
-            if (dx * dx + dy * dy).squareRoot() >= Self.scrollSlop {
-                InputTrace.log("scroll begins at \(point)")
-                isScrolling = true
-                if let gesture = activeGesture {
-                    // The press was a scroll all along: let the view go
-                    // without a tap.
-                    gesture.target.onRelease?(gesture.localPoint(for: point) ?? gesture.localPoint, false)
-                    activeGesture = nil
-                    dragPassedThreshold = false
-                }
-                scrollTarget.target.onScroll?(Point(x: dx, y: dy))
+            if let session = dragSession {
+                session.move(to: point, in: rootNode)
+                needsRepaint = true
                 return
             }
-        }
-
-        // A press on a `.draggable` becomes a drag once it has travelled far
-        // enough — unless the gesture in flight takes drags itself (a fader
-        // on a draggable card keeps its own), or a finger could be scrolling
-        // instead (then only a held press starts one — `holdElapsed`).
-        if let source = dragSourceHit, scrollTarget == nil,
-           activeGesture.map({ !$0.target.takesDrags }) ?? true {
-            let dx = point.x - touchStart.x
-            let dy = point.y - touchStart.y
-            if (dx * dx + dy * dy).squareRoot() >= source.value.minimumDistance {
-                beginDrag(from: source)
+            if isScrolling {
+                scrollTarget?.target.onScroll?(Point(x: point.x - previous.x, y: point.y - previous.y))
                 return
+            }
+            let takesDrags = gestures[id]?.hit.target.takesDrags ?? false
+            if let scrollTarget, !takesDrags {
+                let dx = point.x - touchStart.x
+                let dy = point.y - touchStart.y
+                if (dx * dx + dy * dy).squareRoot() >= Self.scrollSlop {
+                    InputTrace.log("scroll begins at \(point)")
+                    isScrolling = true
+                    // The press was a scroll all along: let the view go
+                    // without a tap.
+                    releasePrimaryGesture()
+                    scrollTarget.target.onScroll?(Point(x: dx, y: dy))
+                    return
+                }
+            }
+
+            // A press on a `.draggable` becomes a drag once it has travelled far
+            // enough — unless the gesture in flight takes drags itself (a fader
+            // on a draggable card keeps its own), or a finger could be scrolling
+            // instead (then only a held press starts one — `holdElapsed`).
+            if let source = dragSourceHit, scrollTarget == nil, !takesDrags {
+                let dx = point.x - touchStart.x
+                let dy = point.y - touchStart.y
+                if (dx * dx + dy * dy).squareRoot() >= source.value.minimumDistance {
+                    beginDrag(from: source)
+                    return
+                }
             }
         }
 
         // Movement only means something to the gesture that is already in
         // flight: a drag must keep reporting to the view it started on, even
         // once the pointer has left that view's bounds.
-        guard let gesture = activeGesture,
-              let local = gesture.localPoint(for: point)
+        guard var gesture = gestures[id],
+              let local = gesture.hit.localPoint(for: point)
         else { return }
 
-        if !dragPassedThreshold {
-            let dx = local.x - gestureStart.x
-            let dy = local.y - gestureStart.y
-            let threshold = gesture.target.minimumDragDistance
+        if !gesture.passedThreshold {
+            let dx = local.x - gesture.start.x
+            let dy = local.y - gesture.start.y
+            let threshold = gesture.hit.target.minimumDragDistance
             guard (dx * dx + dy * dy).squareRoot() >= threshold else { return }
-            dragPassedThreshold = true
+            gesture.passedThreshold = true
+            gestures[id] = gesture
         }
-        reportDrag(gesture: gesture, at: local, ended: false)
+        reportDrag(id: id, gesture: gesture, at: local, ended: false)
     }
 
     /// The hold timer from `pointerDown` firing: still the same press, and
@@ -437,7 +479,7 @@ public final class ViewHost {
     private func holdElapsed(_ serial: Int) {
         guard serial == pressSerial, dragSession == nil, !isScrolling else { return }
         if let menu = contextMenuHit {
-            releaseActiveGesture()
+            releasePrimaryGesture()
             dragSourceHit = nil
             presentContextMenu(menu.value, at: touchStart)
         } else if let source = dragSourceHit {
@@ -445,18 +487,16 @@ public final class ViewHost {
         }
     }
 
-    /// Let the pressed view go without a tap — the press turned out to be
-    /// something else.
-    private func releaseActiveGesture() {
-        guard let gesture = activeGesture else { return }
-        gesture.target.onRelease?(gesture.localPoint(for: pointerLocation) ?? gesture.localPoint, false)
-        activeGesture = nil
-        dragPassedThreshold = false
+    /// Let the view under the primary pointer go without a tap — the press
+    /// turned out to be something else.
+    private func releasePrimaryGesture() {
+        guard let id = primaryPointer, let gesture = gestures.removeValue(forKey: id) else { return }
+        gesture.hit.target.onRelease?(gesture.hit.localPoint(for: pointerLocation) ?? gesture.hit.localPoint, false)
     }
 
     private func beginDrag(from source: Hit<DragSource>) {
         // The press was a drag all along.
-        releaseActiveGesture()
+        releasePrimaryGesture()
         dragSourceHit = nil
         contextMenuHit = nil
         scrollTarget = nil
@@ -469,19 +509,21 @@ public final class ViewHost {
         needsRepaint = true
     }
 
-    private func reportDrag(gesture: HitResult, at local: Point, ended: Bool) {
-        let action = ended ? gesture.target.onDragEnded : gesture.target.onDragChanged
+    private func reportDrag(id: Int, gesture: PressedGesture, at local: Point, ended: Bool) {
+        let target = gesture.hit.target
+        let action = ended ? target.onDragEnded : target.onDragChanged
         guard let action else { return }
         action(DragGesture.Value(
-            startLocation: gestureStart,
+            id: id,
+            startLocation: gesture.start,
             location: local,
             translation: Size(
-                width: local.x - gestureStart.x,
-                height: local.y - gestureStart.y
+                width: local.x - gesture.start.x,
+                height: local.y - gesture.start.y
             ),
             // The view's own rect, origin-relative — a fader turns a position
             // into a fraction with it.
-            bounds: Rect(origin: .zero, size: gesture.frame.size)
+            bounds: Rect(origin: .zero, size: gesture.hit.frame.size)
         ))
     }
 

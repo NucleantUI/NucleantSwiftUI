@@ -17,6 +17,10 @@
 //  shader as a texture. Two engine nodes, then — the canvas, which is never
 //  composited, and the effect's output, which is — updated in that order.
 //
+//  A `VertexShader` view is the same slot again with a graphics pipeline in
+//  place of the compute one: its image is a colour attachment drawn by a
+//  render pass, and composited exactly like the others.
+//
 
 import CVulkan
 import VulkanCore
@@ -27,11 +31,65 @@ import Dispatch
 @MainActor
 final class ShaderSlotRegistry {
 
+    /// What a slot draws with: a compute dispatch or a vertex + fragment pass.
+    @MainActor
+    enum Backend {
+        case compute(OGLShaderNode<NucleantRenderNode>, ShaderPipeline)
+        case graphics(VertFragShaderNode<NucleantRenderNode>, VertexShaderPipeline)
+
+        var argumentCapacity: Int {
+            switch self {
+            case .compute(_, let pipeline): return pipeline.argumentCapacity
+            case .graphics(_, let pipeline): return pipeline.argumentCapacity
+            }
+        }
+
+        func update(_ uniforms: ShaderUniforms) {
+            switch self {
+            case .compute(_, let pipeline): pipeline.update(uniforms)
+            case .graphics(_, let pipeline): pipeline.update(uniforms)
+            }
+        }
+
+        func updateArguments(_ packed: [Float]) {
+            switch self {
+            case .compute(_, let pipeline): pipeline.updateArguments(packed)
+            case .graphics(_, let pipeline): pipeline.updateArguments(packed)
+            }
+        }
+    }
+
+    /// What a view asks its slot to be.
+    enum Request {
+        case compute(ShaderFunction, withLayer: Bool)
+        case graphics(VertexShaderFunction, ShaderDraw)
+
+        /// Identity for the compiled pipeline; the kind is part of it, so a
+        /// path that changes view type rebuilds.
+        var source: String {
+            switch self {
+            case .compute(let function, _): return function.source
+            case .graphics(let function, _): return "#graphics\n" + function.source
+            }
+        }
+
+        var isAnimated: Bool {
+            switch self {
+            case .compute(let function, _): return function.isAnimated
+            case .graphics(let function, _): return function.isAnimated
+            }
+        }
+
+        var withLayer: Bool {
+            if case .compute(_, let withLayer) = self { return withLayer }
+            return false
+        }
+    }
+
     /// One live shader view's GPU state.
     final class Slot {
-        let node: OGLShaderNode<NucleantRenderNode>
+        let backend: Backend
         let container: NucleantRenderNode
-        let pipeline: ShaderPipeline
         /// For a `.shader(_:)` effect: the canvas the view is drawn into,
         /// which the shader samples. `nil` for a generative `Shader` view —
         /// and for a retired effect slot whose canvas has been handed on.
@@ -66,24 +124,22 @@ final class ShaderSlotRegistry {
         var pixelOrigin: Point = .zero
 
         init(
-            node: OGLShaderNode<NucleantRenderNode>,
+            backend: Backend,
             container: NucleantRenderNode,
-            pipeline: ShaderPipeline,
             layer: Layer?,
             width: Int,
             height: Int,
-            function: ShaderFunction,
+            request: Request,
             arguments: ShaderArguments
         ) {
-            self.node = node
+            self.backend = backend
             self.container = container
-            self.pipeline = pipeline
             self.layer = layer
             self.width = width
             self.height = height
-            self.source = function.source
+            self.source = request.source
             self.argumentSignature = arguments.signature
-            self.isAnimated = function.isAnimated
+            self.isAnimated = request.isAnimated
         }
     }
 
@@ -145,7 +201,29 @@ final class ShaderSlotRegistry {
     /// Called from `ShaderContent.place`: make sure a slot exists for this
     /// view, at this size, and put it at this rect.
     func use(path: [Int], function: ShaderFunction, arguments: ShaderArguments, rect: Rect, clip: Rect?) {
-        _ = slot(at: path, function: function, arguments: arguments, rect: rect, clip: clip, withLayer: false)
+        _ = slot(at: path, request: .compute(function, withLayer: false), arguments: arguments, rect: rect, clip: clip)
+    }
+
+    /// Called from `VertexShaderContent.place`: the graphics slot for this
+    /// view, drawing `draw` this frame.
+    func useGraphics(
+        path: [Int],
+        function: VertexShaderFunction,
+        draw: ShaderDraw,
+        arguments: ShaderArguments,
+        rect: Rect,
+        clip: Rect?
+    ) {
+        guard let slot = slot(at: path, request: .graphics(function, draw), arguments: arguments, rect: rect, clip: clip),
+              case .graphics(let node, _) = slot.backend
+        else { return }
+        // Per-frame values, read by the next draw: no rebuild, just a redraw
+        // when they change.
+        let vertices = UInt32(draw.vertices), instances = UInt32(draw.instances)
+        guard node.vertexCount != vertices || node.instanceCount != instances else { return }
+        node.vertexCount = vertices
+        node.instanceCount = instances
+        slot.container.needsRender = true
     }
 
     /// Called from `ShaderEffectContent.place`: the slot for this view with
@@ -158,7 +236,7 @@ final class ShaderSlotRegistry {
         clip: Rect?,
         content: DisplayList
     ) {
-        guard let slot = slot(at: path, function: function, arguments: arguments, rect: rect, clip: clip, withLayer: true),
+        guard let slot = slot(at: path, request: .compute(function, withLayer: true), arguments: arguments, rect: rect, clip: clip),
               let layer = slot.layer
         else { return }
         // Absolute coordinates, so a view that merely moved reads as changed
@@ -179,13 +257,13 @@ final class ShaderSlotRegistry {
     /// created if there is none; placed at `rect` either way.
     private func slot(
         at path: [Int],
-        function: ShaderFunction,
+        request: Request,
         arguments: ShaderArguments,
         rect: Rect,
-        clip: Rect?,
-        withLayer: Bool
+        clip: Rect?
     ) -> Slot? {
-        let source = function.source
+        let source = request.source
+        let withLayer = request.withLayer
         let pixelWidth = max(1, Int((rect.width * scale).rounded()))
         let pixelHeight = max(1, Int((rect.height * scale).rounded()))
 
@@ -202,7 +280,7 @@ final class ShaderSlotRegistry {
                existing.height == pixelHeight,
                existing.source == source,
                existing.argumentSignature == arguments.signature,
-               existing.pipeline.argumentCapacity >= arguments.packed.count,
+               existing.backend.argumentCapacity >= arguments.packed.count,
                (existing.layer != nil) == withLayer {
                 upload(arguments, to: existing)
                 return existing
@@ -228,7 +306,7 @@ final class ShaderSlotRegistry {
         }
 
         guard let slot = makeSlot(
-            function: function,
+            request: request,
             arguments: arguments,
             width: pixelWidth,
             height: pixelHeight,
@@ -251,7 +329,7 @@ final class ShaderSlotRegistry {
     /// again — a static shader's one dispatch was of the old values.
     private func upload(_ arguments: ShaderArguments, to slot: Slot) {
         guard !arguments.isEmpty, arguments.packed != slot.packedArguments else { return }
-        slot.pipeline.updateArguments(arguments.packed)
+        slot.backend.updateArguments(arguments.packed)
         slot.packedArguments = arguments.packed
         slot.container.needsRender = true
     }
@@ -350,7 +428,7 @@ final class ShaderSlotRegistry {
                 x: pointer.x * scale,
                 y: pointer.y * scale
             )
-            slot.pipeline.update(ShaderUniforms(
+            slot.backend.update(ShaderUniforms(
                 time: Float(slot.elapsed),
                 timeDelta: Float(delta),
                 frame: Float(slot.frame),
@@ -403,16 +481,16 @@ final class ShaderSlotRegistry {
     }
 
     private func makeSlot(
-        function: ShaderFunction,
+        request: Request,
         arguments: ShaderArguments,
         width: Int,
         height: Int,
-        layer request: LayerRequest
+        layer layerRequest: LayerRequest
     ) -> Slot? {
         let started = PerfTrace.isVerbose ? DispatchTime.now().uptimeNanoseconds : 0
         let layer: Layer?
         let withLayer: Bool
-        switch request {
+        switch layerRequest {
         case .none:
             layer = nil
             withLayer = false
@@ -428,42 +506,80 @@ final class ShaderSlotRegistry {
                 + (withLayer ? " (canvas \(PerfTrace.millis(from: started, to: canvasReady)))" : ""))
         }
         do {
-            let image = try makeStorageImage(width: width, height: height)
-            let node = OGLShaderNode<NucleantRenderNode>(
-                width: UInt32(width),
-                height: UInt32(height),
-                image: image.image,
-                imageView: image.view,
-                memory: image.memory,
-                storageCapable: true
-            )
-            if let layer {
-                // Borrowed, as the node's contract says: the layer's node
-                // owns the image and frees it.
-                node.register(image: layer.node.image, imageView: layer.node.imageView)
-            }
             // Room for half again as many floats as there are now, so an
             // array that grows a little does not rebuild the slot each time.
             let capacity = arguments.isEmpty ? 0 : max(256, arguments.packed.count * 3 / 2)
-            let pipeline = try ShaderPipeline(
-                engine: engine,
-                imageView: image.view,
-                input: layer?.node.imageView,
-                source: try ShaderCode.compute(
-                    function,
-                    samplesContent: layer != nil,
-                    arguments: arguments
-                ),
-                argumentCapacity: capacity
-            )
-            node.computePipeline = pipeline.pipeline
-            node.computeLayout = pipeline.pipelineLayout
-            node.computeDescriptorSet = pipeline.descriptorSet
-            node.dirty = true
+            let backend: Backend
+            let context: NucleantRenderNode.Context
+            switch request {
+            case .compute(let function, _):
+                let image = try makeImage(width: width, height: height, usage: .storage)
+                let node = OGLShaderNode<NucleantRenderNode>(
+                    width: UInt32(width),
+                    height: UInt32(height),
+                    image: image.image,
+                    imageView: image.view,
+                    memory: image.memory,
+                    storageCapable: true
+                )
+                if let layer {
+                    // Borrowed, as the node's contract says: the layer's node
+                    // owns the image and frees it.
+                    node.register(image: layer.node.image, imageView: layer.node.imageView)
+                }
+                let pipeline = try ShaderPipeline(
+                    engine: engine,
+                    imageView: image.view,
+                    input: layer?.node.imageView,
+                    source: try ShaderCode.compute(
+                        function,
+                        samplesContent: layer != nil,
+                        arguments: arguments
+                    ),
+                    argumentCapacity: capacity
+                )
+                node.computePipeline = pipeline.pipeline
+                node.computeLayout = pipeline.pipelineLayout
+                node.computeDescriptorSet = pipeline.descriptorSet
+                node.dirty = true
+                backend = .compute(node, pipeline)
+                context = .shader(node)
+            case .graphics(let function, let draw):
+                let pass = try colorPass()
+                let image = try makeImage(width: width, height: height, usage: .colorAttachment)
+                let node = try VertFragShaderNode<NucleantRenderNode>(
+                    width: UInt32(width),
+                    height: UInt32(height),
+                    image: image.image,
+                    imageView: image.view,
+                    memory: image.memory,
+                    pass: pass,
+                    vertexCount: UInt32(draw.vertices),
+                    instanceCount: UInt32(draw.instances)
+                )
+                let pipeline: VertexShaderPipeline
+                do {
+                    pipeline = try VertexShaderPipeline(
+                        engine: engine,
+                        renderPass: pass.renderPass!,
+                        source: try GraphicsShaderCode.graphics(function, arguments: arguments),
+                        argumentCapacity: capacity
+                    )
+                } catch {
+                    node.destroyResources(engine)
+                    throw error
+                }
+                node.pipeline = pipeline.pipeline
+                node.pipelineLayout = pipeline.pipelineLayout
+                node.descriptorSet = pipeline.descriptorSet
+                node.dirty = true
+                backend = .graphics(node, pipeline)
+                context = .vertexShader(node)
+            }
 
             let container = NucleantRenderNode(
                 id: Int.random(in: Int.min...Int.max),
-                context: .shader(node)
+                context: context
             )
             container.observeContext()
             // After the layer's canvas node, so the engine draws the canvas
@@ -471,13 +587,12 @@ final class ShaderSlotRegistry {
             engine.append(container)
 
             return Slot(
-                node: node,
+                backend: backend,
                 container: container,
-                pipeline: pipeline,
                 layer: layer,
                 width: width,
                 height: height,
-                function: function,
+                request: request,
                 arguments: arguments
             )
         } catch {
@@ -537,14 +652,43 @@ final class ShaderSlotRegistry {
     /// resources itself, and the slot is no longer in `engine.nodes` for it to
     /// find anyway.
     private func destroy(_ slot: Slot) {
-        slot.node.computePipeline = nil
-        slot.node.computeLayout = nil
-        slot.node.computeDescriptorSet = nil
-        slot.pipeline.destroy()
-        slot.node.destroyResources(engine)
+        switch slot.backend {
+        case .compute(let node, let pipeline):
+            node.computePipeline = nil
+            node.computeLayout = nil
+            node.computeDescriptorSet = nil
+            pipeline.destroy()
+            node.destroyResources(engine)
+        case .graphics(let node, let pipeline):
+            node.pipeline = nil
+            node.pipelineLayout = nil
+            node.descriptorSet = nil
+            pipeline.destroy()
+            node.destroyResources(engine)
+        }
         if let layer = slot.layer {
             recycle(layer)
         }
+    }
+
+    /// The render pass every `VertexShader` slot draws with — one per
+    /// registry, made on first use; the format never varies.
+    private var sharedColorPass: ColorAttachmentPass?
+
+    private func colorPass() throws -> ColorAttachmentPass {
+        if let sharedColorPass { return sharedColorPass }
+        let pass = try ColorAttachmentPass(device: engine.device)
+        sharedColorPass = pass
+        return pass
+    }
+
+    /// How a slot's image is written.
+    private enum ImageUsage {
+        /// By a compute dispatch: `STORAGE`, left in GENERAL.
+        case storage
+        /// By a render pass: `COLOR_ATTACHMENT`, left in UNDEFINED for the
+        /// pass to take from.
+        case colorAttachment
     }
 
     /// Keep a canvas that is no longer in use for the next `.shader` slot,
@@ -567,16 +711,17 @@ final class ShaderSlotRegistry {
         layer.node.destroyResources(engine)
     }
 
-    /// The image the compute shader writes and the composite samples.
+    /// The image a slot's shader writes and the composite samples.
     ///
-    /// `VulkanCore.createStorageImage` does exactly this, but it is a method on
+    /// `VulkanCore.createStorageImage` does much of this, but it is a method on
     /// the `VulkanCore` bootstrap class rather than on `VulkanContext`, so it
     /// isn't reachable from the render engine. RGBA8 rather than BGRA8: storage
     /// support for it is universal, and the composite samples through a view so
     /// the channel order never has to match the swapchain's.
-    private func makeStorageImage(
+    private func makeImage(
         width: Int,
-        height: Int
+        height: Int,
+        usage: ImageUsage
     ) throws -> (image: VkImage, view: VkImageView, memory: VkDeviceMemory) {
         var info = VkImageCreateInfo()
         info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO
@@ -587,9 +732,16 @@ final class ShaderSlotRegistry {
         info.arrayLayers = 1
         info.samples = VK_SAMPLE_COUNT_1_BIT
         info.tiling = VK_IMAGE_TILING_OPTIMAL
-        info.usage = VkImageUsageFlags(
-            VK_IMAGE_USAGE_STORAGE_BIT.rawValue | VK_IMAGE_USAGE_SAMPLED_BIT.rawValue
-        )
+        switch usage {
+        case .storage:
+            info.usage = VkImageUsageFlags(
+                VK_IMAGE_USAGE_STORAGE_BIT.rawValue | VK_IMAGE_USAGE_SAMPLED_BIT.rawValue
+            )
+        case .colorAttachment:
+            info.usage = VkImageUsageFlags(
+                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT.rawValue | VK_IMAGE_USAGE_SAMPLED_BIT.rawValue
+            )
+        }
         info.sharingMode = VK_SHARING_MODE_EXCLUSIVE
         info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
 
@@ -639,7 +791,10 @@ final class ShaderSlotRegistry {
 
         // UNDEFINED → GENERAL once, so the very first dispatch has somewhere
         // valid to write. `OGLShaderNode.update` starts its barrier from
-        // `currentLayout`, which the node initialises to GENERAL.
+        // `currentLayout`, which the node initialises to GENERAL. A colour
+        // attachment needs no transition: its render pass starts from
+        // UNDEFINED and clears.
+        guard usage == .storage else { return (image, view, memory) }
         engine.oneTimeSubmit { cmd in
             engineImageBarrier(
                 cmd,

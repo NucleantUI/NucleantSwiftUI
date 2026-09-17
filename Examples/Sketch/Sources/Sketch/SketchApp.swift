@@ -155,7 +155,6 @@ struct SketchView {
     @State private var current: Stroke? = nil
     @State private var color = swatches[0]
     @State private var width = brushSizes[1]
-    @State private var appearance = Appearance.system
     @Environment(\.colorScheme) private var system
 
     var body: some View {
@@ -167,7 +166,7 @@ struct SketchView {
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
-        .colorScheme(appearance.scheme ?? system)
+        .colorScheme(AppearanceModel.shared.appearance.scheme ?? system)
     }
 
     var toolbar: some View {
@@ -190,8 +189,6 @@ struct SketchView {
 
             Spacer()
 
-            AppearancePicker(appearance: $appearance)
-
             Button("Undo") { _ = strokes.popLast() }
                 .tint(Theme.muted)
                 .disabled(strokes.isEmpty)
@@ -211,5 +208,6 @@ struct SketchApp: NucleantApp {
         WindowGroup("Sketch", width: 900, height: 640) {
             SketchView()
         }
+        .commands { AppearanceCommands() }
     }
 }

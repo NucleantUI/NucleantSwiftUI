@@ -221,15 +221,10 @@ struct ProgressRing {
 struct PomodoroView {
     @State private var session = Session()
     @State private var now = Date()
-    @State private var appearance = Appearance.system
     @Environment(\.colorScheme) private var system
 
     var body: some View {
         VStack(spacing: 14) {
-            HStack {
-                Spacer()
-                AppearancePicker(appearance: $appearance)
-            }
             HStack(spacing: 28) {
                 timerPanel
                 clockPanel
@@ -238,7 +233,7 @@ struct PomodoroView {
         .padding(horizontal: 28, vertical: 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
-        .colorScheme(appearance.scheme ?? system)
+        .colorScheme(AppearanceModel.shared.appearance.scheme ?? system)
         .onAppear {
             Ticker.shared.start {
                 now = Date()
@@ -332,5 +327,6 @@ struct PomodoroApp: NucleantApp {
         WindowGroup("Pomodoro", width: 760, height: 520) {
             PomodoroView()
         }
+        .commands { AppearanceCommands() }
     }
 }

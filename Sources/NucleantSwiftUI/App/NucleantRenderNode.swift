@@ -23,6 +23,9 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         /// view's rect. A vector canvas can't run a fragment shader, so these
         /// get their own slot rather than sharing the canvas.
         case shader(OGLShaderNode<NucleantRenderNode>)
+        /// One `VertexShader` view's image, drawn by a vertex + fragment
+        /// pipeline and composited the same way.
+        case vertexShader(VertFragShaderNode<NucleantRenderNode>)
     }
 
     public let id: Int
@@ -64,6 +67,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
             observe(node)
         case .shader(let node):
             observe(node)
+        case .vertexShader(let node):
+            observe(node)
         }
     }
 
@@ -73,6 +78,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         case .thor(let node):
             node.update(engine, slot: self, cmd: cmd)
         case .shader(let node):
+            node.update(engine, slot: self, cmd: cmd)
+        case .vertexShader(let node):
             node.update(engine, slot: self, cmd: cmd)
         }
         // Cleared here, so an idle frame costs nothing: `canvas.draw()` +
@@ -94,6 +101,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
             node.destroyResources(engine)
         case .shader(let node):
             node.destroyResources(engine)
+        case .vertexShader(let node):
+            node.destroyResources(engine)
         }
     }
 
@@ -103,6 +112,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         case .thor(let node):
             return node.imageView
         case .shader(let node):
+            return node.imageView
+        case .vertexShader(let node):
             return node.imageView
         }
     }
@@ -115,7 +126,7 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         switch context {
         case .thor(let node) where compositesToWindow && compositeRect == nil:
             engine.resizeThorNode(node, id: id, width: width, height: height)
-        case .thor, .shader:
+        case .thor, .shader, .vertexShader:
             break
         }
     }

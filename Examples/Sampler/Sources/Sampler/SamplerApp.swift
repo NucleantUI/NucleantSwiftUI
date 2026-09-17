@@ -254,7 +254,6 @@ struct SampleEditor {
 struct SamplerView {
     let bank: SampleBank
     let player: Player
-    @State private var appearance = Appearance.system
     @Environment(\.colorScheme) private var system
 
     var body: some View {
@@ -267,7 +266,6 @@ struct SamplerView {
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                AppearancePicker(appearance: $appearance)
                 Text(bank.playhead.map { String(format: "playing %3.0f%%", $0 * 100) } ?? "stopped")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -280,7 +278,7 @@ struct SamplerView {
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.background)
-        .colorScheme(appearance.scheme ?? system)
+        .colorScheme(AppearanceModel.shared.appearance.scheme ?? system)
     }
 
     var pads: some View {
@@ -311,5 +309,6 @@ struct SamplerApp: NucleantApp {
         WindowGroup("Sampler", width: 860, height: 640) {
             SamplerView(bank: SampleBank(), player: Player())
         }
+        .commands { AppearanceCommands() }
     }
 }

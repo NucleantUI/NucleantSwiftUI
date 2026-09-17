@@ -226,7 +226,6 @@ struct TaskDetail {
 
 @View
 struct TaskList {
-    @Binding var appearance: Appearance
     @State private var tasks = initialTasks
     @State private var filter = Filter.all
     @State private var nextBacklog = 0
@@ -271,7 +270,6 @@ struct TaskList {
                     .onTapGesture { filter = f }
             }
             Spacer()
-            AppearancePicker(appearance: $appearance)
         }
     }
 
@@ -320,19 +318,18 @@ struct TaskList {
     }
 }
 
-/// Owns the appearance choice and applies it under itself — navigation
+/// Applies the chosen appearance under itself — navigation
 /// bar included.
 @View
 struct RootView {
-    @State private var appearance = Appearance.system
     @Environment(\.colorScheme) private var system
 
     var body: some View {
         NavigationStack("Tasks") {
-            TaskList(appearance: $appearance)
+            TaskList()
         }
         .background(Theme.background)
-        .colorScheme(appearance.scheme ?? system)
+        .colorScheme(AppearanceModel.shared.appearance.scheme ?? system)
     }
 }
 
@@ -342,5 +339,6 @@ struct TasksApp: NucleantApp {
         WindowGroup("Tasks", width: 520, height: 640) {
             RootView()
         }
+        .commands { AppearanceCommands() }
     }
 }

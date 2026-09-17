@@ -287,7 +287,6 @@ struct Card<Content: View> {
 @View
 struct DashboardView {
     @State private var period = Period.week
-    @State private var appearance = Appearance.system
     @Environment(\.colorScheme) private var system
 
     var body: some View {
@@ -373,7 +372,7 @@ struct DashboardView {
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
-        .colorScheme(appearance.scheme ?? system)
+        .colorScheme(AppearanceModel.shared.appearance.scheme ?? system)
     }
 
     var header: some View {
@@ -383,7 +382,6 @@ struct DashboardView {
                 Text("Last \(period.name)").font(.footnote).foregroundColor(.secondary)
             }
             Spacer()
-            AppearancePicker(appearance: $appearance)
             HStack(spacing: 4) {
                 ForEach(Period.allCases, id: \.self) { p in
                     Text(p.name)
@@ -412,6 +410,7 @@ struct DashboardApp: NucleantApp {
         WindowGroup("Dashboard", width: 1000, height: 700) {
             DashboardView()
         }
+        .commands { AppearanceCommands() }
     }
 }
 

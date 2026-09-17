@@ -5,11 +5,13 @@
 
 import NucleantApplication
 import NucleantThorVG
+import NucleantWindow
 #if os(macOS)
 import AppKit
 #endif
 #if os(iOS)
 import UIKit
+import Platform_iOS
 #endif
 
 /// A part of an app's user interface with a life cycle — currently, a window.
@@ -17,6 +19,14 @@ import UIKit
 public protocol Scene {
     /// The windows this scene contributes. The runtime presents each one.
     func _makeWindows() -> [HostingWindow]
+
+    /// The scene's `.commands`, added to the app's menu bar. Nothing by
+    /// default; `.commands(content:)` wraps a scene to add some.
+    func _lowerCommands(into menuBar: MenuBar)
+}
+
+extension Scene {
+    public func _lowerCommands(into menuBar: MenuBar) {}
 }
 
 /// A scene that presents one window over a view hierarchy.
@@ -53,6 +63,12 @@ public struct _TupleScene: Scene {
 
     public func _makeWindows() -> [HostingWindow] {
         scenes.flatMap { $0._makeWindows() }
+    }
+
+    public func _lowerCommands(into menuBar: MenuBar) {
+        for scene in scenes {
+            scene._lowerCommands(into: menuBar)
+        }
     }
 }
 
@@ -152,6 +168,9 @@ public final class AppRuntime<A: NucleantApp>: NucleantApplication {
                 fputs("NucleantSwiftUI: window present failed: \(error)\n", stderr)
             }
         }
+        // Always, even with no `.commands`: the standard menus are what give
+        // the app Quit, Close and the Edit shortcuts.
+        installCommands(self)
     }
 
     /// Hand control to the platform event loop. Does not return.
@@ -190,6 +209,16 @@ public final class AppRuntime<A: NucleantApp>: NucleantApplication {
             NSStringFromClass(_AppLaunchDelegate.self)
         )
         #endif
+    }
+}
+
+extension AppRuntime: WindowCommands {
+    /// The scenes' `.commands`, lowered. Evaluated when installed, so the
+    /// menu reflects the state the scene body reads at that moment.
+    public var menuBar: MenuBar {
+        let menuBar = MenuBar()
+        app.body._lowerCommands(into: menuBar)
+        return menuBar
     }
 }
 
@@ -239,6 +268,13 @@ public final class _AppLaunchDelegate: UIResponder, UIApplicationDelegate {
         )
         config.delegateClass = _AppSceneDelegate.self
         return config
+    }
+
+    /// UIKit asks the app delegate for the menu bar; the runtime's commands
+    /// are waiting in the shared `UIKitMenuBar`.
+    public override func buildMenu(with builder: any UIMenuBuilder) {
+        super.buildMenu(with: builder)
+        UIKitMenuBar.shared.build(with: builder)
     }
 }
 

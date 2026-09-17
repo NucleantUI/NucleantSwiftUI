@@ -122,6 +122,11 @@ public struct ShaderFunction: Hashable, Sendable {
     /// textual test, so a helper that takes `time` as a parameter counts too;
     /// erring towards "animated" only costs dispatches.
     var isAnimated: Bool {
+        Self.mentionsClock(source)
+    }
+
+    /// Whether `source` names any per-frame input, as an identifier.
+    static func mentionsClock(_ source: String) -> Bool {
         let clocks: Set<Substring> = [
             "time", "iTime", "iTimeDelta", "iFrame", "mouse", "iMouse",
             // PyShader's spellings of the same inputs.

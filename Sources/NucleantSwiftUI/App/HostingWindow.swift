@@ -406,19 +406,19 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     public func on_key_up(keyCode: UInt16, characters: String?) {}
 
     public func on_touch_down(id: Int, x: Double, y: Double) {
-        MainActor.assumeIsolated { host.pointerDown(at: Point(x: x, y: y)) }
+        MainActor.assumeIsolated { host.pointerDown(id: id, at: viewPoint(x: x, y: y)) }
     }
 
     public func on_touch_moved(id: Int, x: Double, y: Double) {
-        MainActor.assumeIsolated { host.pointerMoved(to: Point(x: x, y: y)) }
+        MainActor.assumeIsolated { host.pointerMoved(id: id, to: viewPoint(x: x, y: y)) }
     }
 
     public func on_touch_up(id: Int, x: Double, y: Double) {
-        MainActor.assumeIsolated { host.pointerUp(at: Point(x: x, y: y)) }
+        MainActor.assumeIsolated { host.pointerUp(id: id, at: viewPoint(x: x, y: y)) }
     }
 
     public func on_touch_cancelled(id: Int, x: Double, y: Double) {
-        MainActor.assumeIsolated { host.pointerUp(at: Point(x: -1, y: -1)) }
+        MainActor.assumeIsolated { host.pointerCancelled(id: id, at: viewPoint(x: x, y: y)) }
     }
 }
 
