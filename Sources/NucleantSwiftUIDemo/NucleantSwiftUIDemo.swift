@@ -90,11 +90,22 @@ struct TrackRow {
         // Right-click (long press on touch) for the presets.
         .contextMenu {
             Button("Mute") { level = 0 }
-            Button("Half") { level = 0.5 }
             Button("Full") { level = 1 }
+            Menu("Set level") {
+                ForEach([10, 25, 50, 75, 90], id: \.self) { percent in
+                    Button("\(percent)%") { level = Double(percent) / 100 }
+                }
+            }
+            Menu("Nudge") {
+                Button("Up 5%") { level = min(1, level + 0.05) }
+                Button("Down 5%") { level = max(0, level - 0.05) }
+                Menu("Fine") {
+                    Button("Up 1%") { level = min(1, level + 0.01) }
+                    Button("Down 1%") { level = max(0, level - 0.01) }
+                }
+            }
             Divider()
-            Button("Nudge up") { level = min(1, level + 0.05) }
-            Button("Nudge down") { level = max(0, level - 0.05) }
+            Button("Half") { level = 0.5 }
         }
     }
 
@@ -664,6 +675,15 @@ struct ContentView {
             }
 
             Spacer()
+
+            // A dropdown: the same items a context menu takes, under a button.
+            Menu("Tracks") {
+                Button("Mute all") { for i in tracks.indices { tracks[i].level = 0 } }
+                Button("Full all") { for i in tracks.indices { tracks[i].level = 1 } }
+                Divider()
+                Button("Reset") { tracks = defaultTracks }
+            }
+            .tint(Palette.muted)
 
             AppearancePicker(appearance: $appearance)
         }

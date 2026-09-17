@@ -99,6 +99,8 @@ replays as `Tvg_Paint`s. Rebuild happens on invalidation, not per frame.
       bytes; snapshot preview; hold-to-drag inside a scroll view on touch (§24)
 - [x] `.contextMenu(menuItems:)` — right click / long press, presented as
       an overlay slot of the host's root; `Button` draws as a menu row (§25)
+- [x] `.onHover`, hover-lit rows, `Menu` as a submenu row (nested, flips
+      at the edge) and as a dropdown button (§26)
 
 ## Phase 7 — state
 - [x] `@State` with identity-keyed storage across rebuilds
@@ -222,9 +224,10 @@ why, and each shader slot built with its cost),
   what ThorVG's clipper wants.
 - A modifier applied to a multi-child `Group` affects the first child only;
   SwiftUI distributes it over each.
-- A context menu has no hover highlight, no submenus (`Menu`), no
-  keyboard navigation and no `preview:` form. It is positioned at the
-  pointer and clamped to the window, never flipped above it.
+- A context menu has no keyboard navigation and no `preview:` form. It
+  is positioned at the pointer and clamped to the window, never flipped
+  above it; a submenu flips to the left but not upward. Submenus open on
+  hover at once, with none of macOS's short delay.
 - Drag and drop is in-process only — nothing reaches the system pasteboard
   or another app, and nothing arrives from one. A drop hands over one item;
   `FileRepresentation` and the async importers do not exist. The preview is

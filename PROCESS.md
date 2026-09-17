@@ -1504,3 +1504,61 @@ the pointer (a `full` rebuild of 3.7ms, the mixer reused), "Half" sets
 the row to 50% and closes the menu, a click outside closes it without
 reaching the row under it, and a right click on the bottom-right row
 opens the menu pulled inside the window.
+
+## 26. Hover and submenus
+
+A menu without a hover highlight reads as broken, and without submenus
+it is a list. Both needed things the tree could not yet do.
+
+### Hover
+
+The mouse-moved event already reached `pointerMoved`, which ignored it
+unless a press was in flight. Now, when nothing is pressed, the move
+finds the innermost `.onHover` node under the pointer and tells the one
+it left `false` and the one it entered `true`. The target is compared by
+structural path, exactly as a drop target is (§24): the `true` writes
+state, the view rebuilds, the rebuilt node carries a new target object,
+and comparing objects would see a fresh "enter" on every move. One case
+comparing by path does not cover is the hovered node leaving the tree
+under the pointer — a menu that closed — so after a rebuild a hovered
+path with no record is forgotten without being told; its view is gone.
+A finger never arrives without a press, so never hovers, and touch
+hosts need no switch.
+
+### Submenus
+
+A `Menu` row has to open a panel *beside itself*, which means it has to
+know where it is. Views here do not: frames are written to nodes at
+placement and read back by hit testing only. The first design hung the
+submenu off the row's own node, as a second child placed to the right —
+and ran straight into the panel's `.cornerRadius`, which is a clip, and
+a clip clips hit testing as well as drawing (§5's rule that what is not
+drawn is not hit). A submenu can only live in the overlay's `ZStack`,
+beside the panels, so the row must report its frame upward. That is
+`_recordFrame(into:)`: a node that writes its placed rect into a box the
+view holds in `@State`, so the same box survives the rebuilds that
+hovering causes, and the box's identity is the row's identity.
+
+The open submenus are state of the `ContextMenuController` — now
+`@Observable` — as a list of (row identity, items, row frame, level).
+The overlay's `body` reads it, so a change rebuilds the overlay and
+nothing else; `Menu` rows read it too, to stay lit while theirs is
+open. The rules are macOS's: hovering a row at level *n* closes every
+submenu at level *n* or deeper, and a `Menu` row then opens its own;
+hovering into the submenu itself is hovering rows at level *n+1*, which
+closes nothing above. The level travels down the environment from each
+panel. A submenu is anchored to the right of its row with the panel's
+padding pulled back so first rows align, and `_anchored(at:flippingTo:)`
+puts it to the left instead when the right has no room.
+
+The same `Menu` outside a context menu is a button: its items open
+under it through `\.menuPresenter`, an object the host puts in the root
+environment, using the frame of the control just released — the host
+knows it, the view does not.
+
+Verified in the demo: rows light as the pointer crosses them at 2.6ms a
+move (a `scoped(1)` of the row); "Set level" opens its five rows beside
+it, "Nudge › Fine" nests two deep, hovering "Mute" closes both, "50%"
+picked from a submenu sets the row and closes everything; a menu opened
+at the right edge puts its submenu on the left; the "Tracks" dropdown in
+the header opens under its button and "Mute all" mutes all.

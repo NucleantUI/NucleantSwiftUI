@@ -17,3 +17,14 @@ Done as `.contextMenu(menuItems:)` — PROCESS.md §25.
   draws as a row that runs its action and dismisses; `Divider` is a rule.
 * Demo: right-click any mixer row for level presets.
 
+Then, hover and submenus (PROCESS.md §26):
+
+* `.onHover(perform:)`, tracked by `ViewHost` while no button is down,
+  by path like a drop target; rows light under the pointer.
+* `Menu` — inside a context menu a row that opens its items beside it on
+  hover (a tap on touch), nested, flipping left at the window's edge,
+  closed by hovering another row of its panel; on its own a dropdown
+  button that opens its items under itself through `\.menuPresenter`.
+* The open submenus live on the `@Observable` `ContextMenuController`,
+  so opening one is a scoped rebuild of the overlay.
+

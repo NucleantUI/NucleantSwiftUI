@@ -167,6 +167,9 @@ protocol NodeContent {
     /// The menu a right click (or a long press) on this node opens.
     var contextMenuSource: ContextMenuSource? { get }
 
+    /// Told when the pointer moves over or off this node (`.onHover`).
+    var hoverTarget: HoverTarget? { get }
+
     /// True for a subtree kept in the tree but off screen (`._parked`). Its
     /// nodes still carry the frames from when they were last placed, and hit
     /// testing must not trust them.
@@ -191,6 +194,7 @@ extension NodeContent {
     var dragSource: DragSource? { nil }
     var dropTarget: DropTarget? { nil }
     var contextMenuSource: ContextMenuSource? { nil }
+    var hoverTarget: HoverTarget? { nil }
     var isParked: Bool { false }
     var clipsChildren: Bool { false }
 

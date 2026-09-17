@@ -17,7 +17,9 @@ public struct Button<Label: View>: View {
     @Environment(\.tint) private var tint
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.contextMenu) private var contextMenu
+    @Environment(\.menuLevel) private var menuLevel
     @State private var isPressed = false
+    @State private var isHovered = false
 
     public init(action: @escaping () -> Void, @ViewBuilder label: () -> Label) {
         self.action = action
@@ -33,19 +35,17 @@ public struct Button<Label: View>: View {
     }
 
     /// As an item of a context menu: a full-width row, lit in the tint
-    /// while pressed, that runs the action and closes the menu.
+    /// while the pointer is over it or pressing it, that runs the action
+    /// and closes the menu.
     private func menuRow(in menu: ContextMenuController) -> some View {
         label
-            .font(.system(size: 14))
-            .foregroundColor(isPressed ? .white : .primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(.color(isPressed ? tint : .clear))
-            )
-            .opacity(isEnabled ? 1 : 0.4)
+            ._menuRow(isLit: isHovered || isPressed, isEnabled: isEnabled, tint: tint)
+            .onHover { hovering in
+                isHovered = hovering
+                // Moving onto a plain row closes any submenu open beside
+                // this panel.
+                if hovering { menu.hoverRow(level: menuLevel) }
+            }
             ._hitTarget(HitTarget(
                 isEnabled: isEnabled,
                 onPress: { _ in isPressed = true },

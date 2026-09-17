@@ -282,18 +282,32 @@ rebuilds and navigation.
 TrackRow(track)
     .contextMenu {
         Button("Duplicate") { duplicate(track) }
-        Button("Rename…") { rename(track) }
+        Menu("Set level") {                       // a submenu
+            Button("Mute") { track.level = 0 }
+            Button("Full") { track.level = 1 }
+        }
         Divider()
         Button("Delete") { delete(track) }
     }
+
+Menu("Tracks") {                                  // a dropdown button
+    Button("Mute all") { muteAll() }
+}
 ```
 
 Opens on a right click, or on a press held still on a touch host, at the
 pointer and kept inside the window. `Button`s are the rows — lit in the
-tint while pressed, run their action and close the menu — `Divider` is a
-rule, and `if` works as in any builder. A press anywhere outside closes
-it and goes no further. There is no hover highlight, no submenu, and no
-keyboard.
+tint under the pointer or while pressed, run their action and close the
+menu — `Divider` is a rule, and `if` works as in any builder. A `Menu`
+inside is a row that opens its items beside it as the pointer moves over
+it (a tap, on touch), to the left when the right edge has no room, nested
+as deep as you like; moving onto another row of the panel it hangs off
+closes it. A `Menu` on its own is a button that opens its items under
+itself. A press anywhere outside closes everything and goes no further.
+No keyboard navigation yet.
+
+`.onHover { hovering in … }` is what the rows use, and is yours too — a
+mouse only; a finger never hovers.
 
 ### Drag and drop
 

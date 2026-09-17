@@ -99,6 +99,15 @@ public final class ViewHost {
     /// touch hosts, which have no right button.
     public var opensContextMenuOnLongPress = false
 
+    /// The `.onHover` node the pointer is over, while no button is down.
+    /// Compared by path, as a drop target is — the `true` it was told
+    /// usually rebuilt it.
+    private var hovered: Hit<HoverTarget>?
+
+    /// The frame of the control most recently released — where a `Menu`
+    /// pressed as a button opens its items.
+    private var lastReleasedFrame: Rect?
+
     /// Whether a moving pointer scrolls the `ScrollView` under it. On for
     /// touch hosts, where a finger is the only way to scroll; off for a mouse,
     /// which scrolls with its wheel and drags only what asks for drags.
@@ -118,6 +127,9 @@ public final class ViewHost {
 
     public init<Root: View>(root: Root) {
         self.root = AnyView(root)
+        environment.menuPresenter = MenuPresenter { [weak self] items in
+            self?.presentMenu(items)
+        }
     }
 
     // MARK: - Size
@@ -164,6 +176,12 @@ public final class ViewHost {
             // only safe answer is to build it again.
             rebuildAll(dirty: work.paths)
             kind = "fallback"
+        }
+
+        // A hovered node the rebuild removed (a menu that closed under the
+        // pointer) is forgotten without being told: its view is gone.
+        if let hovered, records.entry(for: hovered.value.path) == nil {
+            self.hovered = nil
         }
 
         let built = PerfTrace.isEnabled ? DispatchTime.now().uptimeNanoseconds : 0
@@ -373,6 +391,7 @@ public final class ViewHost {
         if gesture.passedThreshold {
             reportDrag(id: id, gesture: gesture, at: local, ended: true)
         }
+        lastReleasedFrame = gesture.hit.frame
         gesture.hit.target.onRelease?(local, inside)
         if inside {
             gesture.hit.target.onTap?(local)
@@ -413,7 +432,13 @@ public final class ViewHost {
 
     public func pointerMoved(id: Int = 0, to point: Point) {
         // A hovering mouse has no press in flight but still moves the
-        // location that a scroll wheel event lands on.
+        // location that a scroll wheel event lands on — and the node under
+        // it. A finger never arrives here without a press, so never hovers.
+        if primaryPointer == nil, gestures.isEmpty {
+            pointerLocation = point
+            updateHover(at: point)
+            return
+        }
         if primaryPointer == nil || primaryPointer == id {
             let previous = pointerLocation
             pointerLocation = point
@@ -527,6 +552,20 @@ public final class ViewHost {
         ))
     }
 
+    /// Tell the `.onHover` node under `point` it is hovered, and the one
+    /// that was, that it no longer is. Same path, same node — the object
+    /// is refreshed so the closure called is the current one.
+    private func updateHover(at point: Point) {
+        let found = rootNode?.hitTest(point) { $0.content.hoverTarget }
+        guard found?.value.path != hovered?.value.path else {
+            hovered = found
+            return
+        }
+        hovered?.value.action(false)
+        hovered = found
+        found?.value.action(true)
+    }
+
     // MARK: - Context menus
 
     /// A right click: open the menu of the innermost `.contextMenu` under
@@ -544,8 +583,22 @@ public final class ViewHost {
     }
 
     private func presentContextMenu(_ source: ContextMenuSource, at anchor: Point) {
-        InputTrace.log("context menu at \(anchor)")
-        let controller = ContextMenuController(items: source.items) { [weak self] in
+        presentMenu(source.items, at: anchor)
+    }
+
+    /// A `Menu` pressed as a button: its items open under the control that
+    /// was just released, or at the pointer if no control was.
+    private func presentMenu(_ items: AnyView) {
+        let anchor = lastReleasedFrame.map { Point(x: $0.minX, y: $0.maxY + 2) } ?? pointerLocation
+        if contextMenu != nil {
+            dismissContextMenu()
+        }
+        presentMenu(items, at: anchor)
+    }
+
+    private func presentMenu(_ items: AnyView, at anchor: Point) {
+        InputTrace.log("menu at \(anchor)")
+        let controller = ContextMenuController(items: items) { [weak self] in
             self?.dismissContextMenu()
         }
         contextMenu = (anchor, controller)
