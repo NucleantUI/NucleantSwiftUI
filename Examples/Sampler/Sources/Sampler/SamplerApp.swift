@@ -100,10 +100,10 @@ struct WaveformView {
         Shader(envelopeShader, arguments: [
                 .floatArray("mins", negatives),
                 .floatArray("maxs", positives),
-                .float("gain", sample.gain),
-                .float("trimStart", sample.trimStart),
-                .float("trimEnd", sample.trimEnd),
-                .float("playhead", playhead ?? -1),
+                .float("gain", Float(sample.gain)),
+                .float("trimStart", Float(sample.trimStart)),
+                .float("trimEnd", Float(sample.trimEnd)),
+                .float("playhead", Float(playhead ?? -1)),
                 .color("tint", sample.color),
                 .color("paper", Theme.wave),
             ])

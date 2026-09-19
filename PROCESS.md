@@ -1562,3 +1562,59 @@ it, "Nudge › Fine" nests two deep, hovering "Mute" closes both, "50%"
 picked from a submenu sets the row and closes everything; a menu opened
 at the right edge puts its submenu on the left; the "Tracks" dropdown in
 the header opens under its button and "Mute all" mutes all.
+
+## 27. Popovers
+
+`.popover(isPresented:content:)` is the third thing to live in the host's
+overlay slot, and the first driven by a binding rather than by an event.
+A `Menu` opens its items from inside a release handler, when the host
+knows which control was just released; a popover opens whenever a `Bool`
+somewhere turns true — a model, a `@State`, a button on the far side of
+the window — so nobody is holding an event when it happens.
+
+The modifier is a view, `PopoverModifier`, and its `body` is where the
+binding is read: that read is attributed to the modifier the way any read
+in a body is, so a write to the binding rebuilds the modifier and nothing
+else. The body keeps the host's list in step — `present` while true,
+`dismiss` while false — and wraps the content in `_recordFrame(into:)`
+(§26), so the anchor's frame is on the same kind of box a `Menu` row
+uses. The list is `PopoverPresenter`, one per host, `@Observable`, in the
+root environment beside `menuPresenter`; the overlay reads it, so a
+popover coming or going is a scoped rebuild of the overlay.
+
+Two things about doing that from inside a build. `present` must not
+*read* the observable list, or the modifier's body would register as a
+reader of what it writes and rebuild itself every frame — the presenter
+keeps an untracked copy for its own lookups and only assigns the tracked
+one. And the write lands the frame after: the overlay is compared and
+kept in the pass that made it dirty, and rebuilt in the next, as any
+state write made during a build is. A window ticks; a headless test has
+to call `update()` until it returns false.
+
+The overlay slot is now `_HostOverlay`: the popovers, and over them the
+context menu if one is open, so a menu opened from a popover's content
+sits above it. Each popover is its content on a panel under
+`_popoverPlaced(around:)`, which is `_anchored(at:)` with a choice: the
+panel measured at its own size, then the first of above / below /
+trailing / leading with room for it inside the window (less a margin),
+centred on the anchor along the other axis and pulled inside; when
+nothing fits, the taller of above and below, over the anchor. The arrow
+is two commands appended after the child: a triangle filled like the
+panel, its base a point inside the panel so it covers the border there,
+and the two showing sides stroked like the border. Its tip sits on the
+anchor's centre line, kept off the panel's rounded corners.
+
+Closing: the scrim's `onPress` takes the popover off the list at once
+*and* sets the binding false — the list so the overlay is dirty this
+frame, the binding so the modifier agrees next frame — and a press on
+the scrim goes no further, as for a menu. A view that leaves the tree
+while presenting has nothing left to set its binding false, so the list
+holds the anchor box weakly and the box's `deinit` (the `@State` slot
+was the last owner) dismisses by id.
+
+Verified headless, in the `NucleantTouchBayUI` snapshot test: a button in
+the lower half of the gallery opens its panel above itself, over the
+cards beside it, the arrow's bounds 24 × 12 centred on the button; a
+press on a slider inside sets the slider and keeps the panel; a button
+inside sets the model and closes it; a press in the window's corner
+closes it without a choice.

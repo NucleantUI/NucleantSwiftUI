@@ -39,7 +39,7 @@ enum GraphicsShaderCode {
             return .glsl(vertex: vertex, fragment: fragment)
         case .pyshader:
             let interface = GraphicsInterface.nucleantSwiftUI(
-                arguments: arguments.declarations.map { ($0.name, ShaderArgumentKind(glslType: $0.type)) }
+                arguments: try ShaderArgumentKind.kinds(of: arguments)
             )
             do {
                 let compiled = try PyShader.compile(function.vertex, target: .graphics(interface))

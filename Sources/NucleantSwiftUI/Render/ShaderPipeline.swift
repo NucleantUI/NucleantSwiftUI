@@ -77,7 +77,7 @@ enum ShaderCode {
         case .pyshader:
             let interface = ComputeImageInterface.nucleantSwiftUI(
                 samplesContent: samplesContent,
-                arguments: arguments.declarations.map { ($0.name, ShaderArgumentKind(glslType: $0.type)) }
+                arguments: try ShaderArgumentKind.kinds(of: arguments)
             )
             do {
                 return .spirv(try PyShader.compile(function.body, target: .computeImage(interface)).spirv)
@@ -91,13 +91,30 @@ enum ShaderCode {
 
 extension ShaderArgumentKind {
     /// From the GLSL declaration `ShaderArgument` produces for itself.
-    init(glslType: String) {
+    init?(glslType: String) {
         switch glslType {
         case "float": self = .float
         case "vec2": self = .float2
         case "vec3": self = .float3
         case "vec4": self = .float4
-        default: self = .floatArray
+        case "float[]": self = .floatArray
+        case "vec2[]": self = .float2Array
+        case "vec3[]": self = .float3Array
+        case "vec4[]": self = .float4Array
+        default: return nil
+        }
+    }
+
+    /// PyShader's view of `arguments`, or the error for one it cannot take.
+    static func kinds(of arguments: ShaderArguments) throws -> [(name: String, kind: ShaderArgumentKind)] {
+        try arguments.declarations.map { declaration in
+            guard let kind = ShaderArgumentKind(glslType: declaration.type) else {
+                throw ShaderError.compileFailed(
+                    "PyShader: argument '\(declaration.name)' is a \(declaration.type); "
+                    + "PyShader takes float, float2/3/4, color and arrays of them"
+                )
+            }
+            return (declaration.name, kind)
         }
     }
 }
@@ -242,33 +259,45 @@ extension ShaderSource {
         for (index, declaration) in arguments.declarations.enumerated() {
             let name = declaration.name
             let at = "ARG_OFFSET(\(index))"
-            switch declaration.type {
-            case "array":
+            let type = declaration.type
+            if type.hasSuffix("[]") {
+                // `name(i)` reads element i — `width` floats from the
+                // element's start — and `nameCount` is the length.
+                let element = String(type.dropLast(2))
+                let width = Self.componentCount(of: element)
+                let load = Self.load(element, from: "at")
                 declarations += """
                 int \(name)Count;
-                float \(name)(int i) {
+                \(element) \(name)(int i) {
                     int n = ARG_COUNT(\(index));
-                    return n > 0 ? uArgs.data[\(at) + clamp(i, 0, n - 1)] : 0.0;
+                    int at = \(at) + clamp(i, 0, n - 1) * \(width);
+                    return n > 0 ? \(load) : \(element)(0.0);
                 }
 
                 """
                 loads += "    \(name)Count = ARG_COUNT(\(index));\n"
-            case "float":
-                declarations += "float \(name);\n"
-                loads += "    \(name) = uArgs.data[\(at)];\n"
-            case "vec2":
-                declarations += "vec2 \(name);\n"
-                loads += "    \(name) = vec2(uArgs.data[\(at)], uArgs.data[\(at) + 1]);\n"
-            case "vec3":
-                declarations += "vec3 \(name);\n"
-                loads += "    \(name) = vec3(uArgs.data[\(at)], uArgs.data[\(at) + 1], uArgs.data[\(at) + 2]);\n"
-            default:
-                declarations += "vec4 \(name);\n"
-                loads += "    \(name) = vec4(uArgs.data[\(at)], uArgs.data[\(at) + 1], "
-                    + "uArgs.data[\(at) + 2], uArgs.data[\(at) + 3]);\n"
+            } else {
+                declarations += "\(type) \(name);\n"
+                loads += "    \(name) = \(Self.load(type, from: at));\n"
             }
         }
         return (declarations, loads)
+    }
+
+    private static func componentCount(of type: String) -> Int {
+        switch type {
+        case "vec2": return 2
+        case "vec3": return 3
+        case "vec4": return 4
+        default: return 1
+        }
+    }
+
+    /// The expression that reads one `type` starting at float index `at`.
+    private static func load(_ type: String, from at: String) -> String {
+        let width = componentCount(of: type)
+        let components = (0..<width).map { $0 == 0 ? "uArgs.data[\(at)]" : "uArgs.data[\(at) + \($0)]" }
+        return width == 1 ? components[0] : "\(type)(\(components.joined(separator: ", ")))"
     }
 }
 
