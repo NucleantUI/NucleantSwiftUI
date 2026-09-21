@@ -2,6 +2,8 @@
 //  Canvas.swift
 //  NucleantSwiftUI
 //
+import SulphurGeometry
+
 
 
 @available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
@@ -20,7 +22,7 @@ public struct Canvas<Symbols> where Symbols : View {
     /// - Parameters:
     ///   - context: The graphics context to draw into.
     ///   - size: The current size of the view.
-    public var renderer: (inout GraphicsContext, CGSize) -> Void
+    public var renderer: (inout GraphicsContext, Size) -> Void
 
     /// A Boolean that indicates whether the canvas is fully opaque.
     ///
@@ -111,7 +113,7 @@ public struct Canvas<Symbols> where Symbols : View {
     ///     using the ``View/tag(_:)`` modifier, so that you can find them from
     ///     within your renderer using the ``GraphicsContext/resolveSymbol(id:)``
     ///     method.
-    public init(opaque: Bool = false, colorMode: ColorRenderingMode = .nonLinear, rendersAsynchronously: Bool = false, renderer: @escaping (inout GraphicsContext, CGSize) -> Void, @ViewBuilder symbols: () -> Symbols)
+    //public init(opaque: Bool = false, colorMode: ColorRenderingMode = .nonLinear, rendersAsynchronously: Bool = false, renderer: @escaping (inout GraphicsContext, Size) -> Void, @ViewBuilder symbols: () -> Symbols)
 
     /// The type of view representing the body of this view.
     ///

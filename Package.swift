@@ -46,6 +46,7 @@ let package = Package(
     products: [
         .library(name: "NucleantSwiftUI", targets: ["NucleantSwiftUI"]),
         .executable(name: "NucleantSwiftUIDemo", targets: ["NucleantSwiftUIDemo"]),
+        .executable(name: "ExperimentalUITests", targets: ["ExperimentalUITests"]),
     ],
     dependencies: nucleantDependencies() + [
         // Pinned to the version the sibling packages already resolve, so the
@@ -74,6 +75,7 @@ let package = Package(
                 .product(name: "NucleantWindow", package: "NucleantApplication"),
                 .product(name: "Platform_MacOS", package: "NucleantApplication", condition: .when(platforms: [.macOS])),
                 .product(name: "Platform_iOS", package: "NucleantApplication", condition: .when(platforms: [.iOS])),
+                //.product(name: "Platform_Android", package: "NucleantApplication", condition: .when(platforms: [.android]))
             ],
             // The default faces (Roboto, Roboto Mono) travel with the library,
             // so text looks the same on every platform and never depends on
@@ -83,6 +85,10 @@ let package = Package(
         .executableTarget(
             name: "NucleantSwiftUIDemo",
             dependencies: ["NucleantSwiftUI"]
+        ),
+        .executableTarget(
+            name: "ExperimentalUITests",
+            dependencies: ["NucleantSwiftUI", .product(name: "NucleantThorVG", package: "NucleantThorVG")]
         ),
     ]
 )

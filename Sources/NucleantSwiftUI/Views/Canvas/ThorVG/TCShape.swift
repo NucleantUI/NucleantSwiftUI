@@ -1,15 +1,14 @@
 //
-//  TShape.swift
+//  TCShape.swift
 //  NucleantSwiftUI
 //
-//  Created by CodeBuilder on 20/09/2026.
-//
+import NucleantThorVG
 
 
-public final class TShape: ThorShape {
+public final class TCShape: ThorShape {
     public var base: Tvg_Paint
     
-    init(base: Tvg_Paint = tvg_shape_new()) {
+    public init(base: Tvg_Paint = tvg_shape_new()) {
         self.base = base
     }
 }

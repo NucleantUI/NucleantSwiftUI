@@ -3,7 +3,7 @@
 //  NucleantSwiftUI
 //
 import NucleantThorVG
-
+import NucleantSwiftUI
 
 
 @View @MainActor

@@ -1,3 +1,11 @@
+//
+//  ColorRenderingMode.swift
+//  NucleantSwiftUI
+//
+//  Created by CodeBuilder on 19/09/2026.
+//
+
+
 /// The set of possible working color spaces for color-compositing operations.
 ///
 /// Each color space guarantees the preservation of a particular range of color
@@ -31,7 +39,7 @@ public enum ColorRenderingMode : Sendable {
     /// - Parameters:
     ///   - lhs: A value to compare.
     ///   - rhs: Another value to compare.
-    public static func == (a: ColorRenderingMode, b: ColorRenderingMode) -> Bool
+    //public static func == (a: ColorRenderingMode, b: ColorRenderingMode) -> Bool
 
     /// Hashes the essential components of this value by feeding them into the
     /// given hasher.
@@ -48,7 +56,7 @@ public enum ColorRenderingMode : Sendable {
     ///
     /// - Parameter hasher: The hasher to use when combining the components
     ///   of this instance.
-    public func hash(into hasher: inout Hasher)
+    //public func hash(into hasher: inout Hasher)
 
     /// The hash value.
     ///
@@ -58,5 +66,5 @@ public enum ColorRenderingMode : Sendable {
     /// - Important: `hashValue` is deprecated as a `Hashable` requirement. To
     ///   conform to `Hashable`, implement the `hash(into:)` requirement instead.
     ///   The compiler provides an implementation for `hashValue` for you.
-    public var hashValue: Int { get }
+    //public var hashValue: Int { get }
 }
