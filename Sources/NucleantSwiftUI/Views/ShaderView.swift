@@ -59,8 +59,9 @@ public struct ShaderFunction: Hashable, Sendable {
     /// The module defines `def main(...) -> float4` and takes what it needs by
     /// parameter name: `uv`, `frag_coord`, `pixel`, `time`, `time_delta`,
     /// `frame`, `resolution`, `mouse`, `mouse_click`, plus every
-    /// `ShaderArgument` by its name (a `.floatArray` arrives as a `FloatArray`
-    /// — `a[i]` and `len(a)`). Under `.shader(_:)`, `layer(uv)` reads the
+    /// `ShaderArgument` by its name (a `.floatArray` arrives as a `FloatArray`,
+    /// a `.float2Array` as a `Float2Array` and so on — `a[i]` and `len(a)`).
+    /// Under `.shader(_:)`, `layer(uv)` reads the
     /// view's own pixels as it does in GLSL. Helper functions, module
     /// constants and lambdas live in the same source:
     ///
@@ -145,16 +146,79 @@ public struct ShaderFunction: Hashable, Sendable {
     }
 }
 
+/// Two, three and four floats, laid out as the GPU reads them.
+///
+/// Plain `Float` fields and nothing else, so an array of them is the byte
+/// image of a `vec2[]`/`vec3[]`/`vec4[]` and is copied into the argument
+/// buffer whole rather than a component at a time.
+public struct Float2: Hashable, Sendable {
+    public var v1: Float
+    public var v2: Float
+
+    public init(_ v1: Float, _ v2: Float) {
+        self.v1 = v1
+        self.v2 = v2
+    }
+    
+    public init<F: BinaryFloatingPoint>(_ v1: F, _ v2: F) {
+        self.v1 = .init(v1)
+        self.v2 = .init(v2)
+    }
+    
+    
+}
+
+
+public struct Float3: Hashable, Sendable {
+    public var v1: Float
+    public var v2: Float
+    public var v3: Float
+
+    public init(_ v1: Float, _ v2: Float, _ v3: Float) {
+        self.v1 = v1
+        self.v2 = v2
+        self.v3 = v3
+    }
+    
+    public init<F: BinaryFloatingPoint>(_ v1: F, _ v2: F, _ v3: F) {
+        self.v1 = .init(v1)
+        self.v2 = .init(v2)
+        self.v3 = .init(v3)
+    }
+}
+
+public struct Float4: Hashable, Sendable {
+    public var v1: Float
+    public var v2: Float
+    public var v3: Float
+    public var v4: Float
+
+    public init(_ v1: Float, _ v2: Float, _ v3: Float, _ v4: Float) {
+        self.v1 = v1
+        self.v2 = v2
+        self.v3 = v3
+        self.v4 = v4
+    }
+    
+    public init<F: BinaryFloatingPoint>(_ v1: F, _ v2: F, _ v3: F, _ v4: F) {
+        self.v1 = .init(v1)
+        self.v2 = .init(v2)
+        self.v3 = .init(v3)
+        self.v4 = .init(v4)
+    }
+}
+
 /// A value handed to a shader from Swift — SwiftUI's `Shader.Argument`.
 ///
 /// Each one is named, and the name is what the GLSL body sees:
 ///
 /// ```swift
 /// Shader(envelope, arguments: [
-///     .float("gain", 1.5),               // float gain;
-///     .float2("size", w, h),             // vec2  size;
-///     .color("tint", .orange),           // vec4  tint;
-///     .floatArray("mins", negatives),    // float mins(int i); int minsCount;
+///     .float("gain", 1.5),                   // float gain;
+///     .float2("size", Float2(w, h)),         // vec2  size;
+///     .color("tint", .orange),               // vec4  tint;
+///     .floatArray("mins", negatives),        // float mins(int i); int minsCount;
+///     .float2Array("points", points),        // vec2  points(int i); int pointsCount;
 /// ])
 /// ```
 ///
@@ -170,47 +234,86 @@ public struct ShaderFunction: Hashable, Sendable {
 /// animated; the set of names and kinds is part of the compiled pipeline's
 /// identity, so keep those stable across rebuilds and vary only the values.
 public enum ShaderArgument: Hashable, Sendable {
-    case float(String, Double)
-    case float2(String, Double, Double)
-    case float3(String, Double, Double, Double)
-    case float4(String, Double, Double, Double, Double)
+    case float(String, Float)
+    case float2(String, Float2)
+    case float3(String, Float3)
+    case float4(String, Float4)
     case color(String, Color)
     case floatArray(String, [Float])
+    case float2Array(String, [Float2])
+    case float3Array(String, [Float3])
+    case float4Array(String, [Float4])
 
     public var name: String {
         switch self {
-        case .float(let name, _), .float2(let name, _, _), .float3(let name, _, _, _),
-             .float4(let name, _, _, _, _), .color(let name, _), .floatArray(let name, _):
+        case .float(let name, _), .float2(let name, _), .float3(let name, _), .float4(let name, _),
+             .color(let name, _), .floatArray(let name, _), .float2Array(let name, _),
+             .float3Array(let name, _), .float4Array(let name, _):
             return name
         }
     }
 
-    /// The GLSL declaration this argument becomes.
+    /// The GLSL declaration this argument becomes; `[]` marks an array of
+    /// the element type.
     var glslType: String {
         switch self {
-        case .float:      return "float"
-        case .float2:     return "vec2"
-        case .float3:     return "vec3"
-        case .float4:     return "vec4"
-        case .color:      return "vec4"
-        case .floatArray: return "array"
+        case .float:       return "float"
+        case .float2:      return "vec2"
+        case .float3:      return "vec3"
+        case .float4:      return "vec4"
+        case .color:       return "vec4"
+        case .floatArray:  return "float[]"
+        case .float2Array: return "vec2[]"
+        case .float3Array: return "vec3[]"
+        case .float4Array: return "vec4[]"
         }
     }
 
-    /// The numbers, as they are packed into the buffer. A color is resolved
-    /// for `scheme` first, so a dynamic one reaches the shader in the
-    /// appearance the view is drawn under.
-    func values(for scheme: ColorScheme) -> [Float] {
+    /// Appends the value's floats to `data` and returns how many elements
+    /// went in — one for a scalar or vector, the length for an array. A
+    /// color is resolved for `scheme` first, so a dynamic one reaches the
+    /// shader in the appearance the view is drawn under. Vectors and their
+    /// arrays are copied as the bytes they already are.
+    func pack(into data: inout [Float], for scheme: ColorScheme) -> Int {
         switch self {
-        case .float(_, let x):              return [Float(x)]
-        case .float2(_, let x, let y):      return [Float(x), Float(y)]
-        case .float3(_, let x, let y, let z): return [Float(x), Float(y), Float(z)]
-        case .float4(_, let x, let y, let z, let w): return [Float(x), Float(y), Float(z), Float(w)]
+        case .float(_, let x):
+            data.append(x)
+            return 1
+        case .float2(_, let v):
+            return Self.append(v, to: &data)
+        case .float3(_, let v):
+            return Self.append(v, to: &data)
+        case .float4(_, let v):
+            return Self.append(v, to: &data)
         case .color(_, let color):
             let resolved = color.resolved(for: scheme)
-            return [Float(resolved.red), Float(resolved.green), Float(resolved.blue), Float(resolved.alpha)]
-        case .floatArray(_, let array):     return array
+            data.append(contentsOf: [Float(resolved.red), Float(resolved.green), Float(resolved.blue), Float(resolved.alpha)])
+            return 1
+        case .floatArray(_, let array):
+            data.append(contentsOf: array)
+            return array.count
+        case .float2Array(_, let array):
+            return Self.append(array, to: &data)
+        case .float3Array(_, let array):
+            return Self.append(array, to: &data)
+        case .float4Array(_, let array):
+            return Self.append(array, to: &data)
         }
+    }
+
+    private static func append<V>(_ value: V, to data: inout [Float]) -> Int {
+        append([value], to: &data)
+    }
+
+    /// The array's storage, reinterpreted as floats. Holds because `Float2`,
+    /// `Float3` and `Float4` are nothing but `Float` fields: their stride is
+    /// their size, so consecutive elements are consecutive floats.
+    private static func append<V>(_ array: [V], to data: inout [Float]) -> Int {
+        assert(MemoryLayout<V>.stride == MemoryLayout<V>.size && MemoryLayout<V>.size % MemoryLayout<Float>.size == 0)
+        array.withUnsafeBytes { bytes in
+            data.append(contentsOf: bytes.bindMemory(to: Float.self))
+        }
+        return array.count
     }
 }
 
@@ -231,13 +334,10 @@ struct ShaderArguments: Equatable {
         signature = declarations.map { "\($0.name):\($0.type)" }.joined(separator: ",")
         var header: [Float] = []
         var data: [Float] = []
-        var offset = arguments.count * 2
+        let base = arguments.count * 2
         for argument in arguments {
-            let values = argument.values(for: colorScheme)
-            header.append(Float(offset))
-            header.append(Float(values.count))
-            data.append(contentsOf: values)
-            offset += values.count
+            header.append(Float(base + data.count))
+            header.append(Float(argument.pack(into: &data, for: colorScheme)))
         }
         packed = header + data
     }

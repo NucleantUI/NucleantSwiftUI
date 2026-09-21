@@ -13,3 +13,10 @@
 public enum NucleantSwiftUI {
     public static let version = "0.1.0"
 }
+
+
+public extension Double {
+    var float: Float { .init(self) }
+}
+
+

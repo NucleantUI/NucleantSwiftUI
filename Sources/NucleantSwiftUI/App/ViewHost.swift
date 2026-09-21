@@ -91,6 +91,11 @@ public final class ViewHost {
     /// Built into the tree's overlay slot on the next rebuild.
     private var contextMenu: (anchor: Point, controller: ContextMenuController)?
 
+    /// The popovers on screen (`.popover(isPresented:content:)`): the
+    /// modifiers keep the list in step with their bindings, the overlay
+    /// slot draws from it.
+    private let popoverPresenter = PopoverPresenter()
+
     /// The innermost `.contextMenu` under the press in flight, for a touch
     /// host where a held press opens it.
     private var contextMenuHit: Hit<ContextMenuSource>?
@@ -130,6 +135,7 @@ public final class ViewHost {
         environment.menuPresenter = MenuPresenter { [weak self] items in
             self?.presentMenu(items)
         }
+        environment.popoverPresenter = popoverPresenter
     }
 
     // MARK: - Size
@@ -228,10 +234,13 @@ public final class ViewHost {
             records: records,
             dirtyPaths: dirty
         )
-        let overlay = contextMenu.map { menu in
-            AnyView(ContextMenuOverlay(anchor: menu.anchor, controller: menu.controller))
-        }
-        rootNode = buildNode(_HostRoot(content: root, overlay: overlay), &context)
+        let overlay = _HostOverlay(
+            popovers: popoverPresenter,
+            contextMenu: contextMenu.map { menu in
+                ContextMenuOverlay(anchor: menu.anchor, controller: menu.controller)
+            }
+        )
+        rootNode = buildNode(_HostRoot(content: root, overlay: AnyView(overlay)), &context)
         releaseDeparted()
     }
 

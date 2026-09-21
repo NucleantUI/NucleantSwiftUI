@@ -309,6 +309,28 @@ No keyboard navigation yet.
 `.onHover { hovering in … }` is what the rows use, and is yours too — a
 mouse only; a finger never hovers.
 
+### Popovers
+
+```swift
+Button("Options") { showOptions = true }
+    .popover(isPresented: $showOptions) {
+        VStack {
+            Text("Gain")
+            Fader(level: $gain)
+            Button("Done") { showOptions = false }
+        }
+    }
+```
+
+A panel holding whatever you build, drawn over the whole window with an
+arrow pointing at the view it is on: above the view when there is room,
+else below, else to its trailing then leading side, and always inside the
+window. The content is ordinary views — buttons in it are buttons, not
+menu rows. A press anywhere outside sets the binding false and goes no
+further; the content can set it false itself. A view that leaves the tree
+while presenting takes its popover with it. Popovers and context menus
+share the host's overlay slot, the menu on top.
+
 ### Drag and drop
 
 A value moves between views the way it does in SwiftUI: it is
@@ -416,15 +438,20 @@ Values from Swift reach the body as named inputs — SwiftUI's
 Shader(envelope, arguments: [
     .floatArray("mins", negatives),       // float mins(int i); int minsCount;
     .floatArray("maxs", positives),
-    .float("gain", sample.gain),          // float gain;
+    .float("gain", Float(sample.gain)),   // float gain;
+    .float2("size", Float2(w, h)),        // vec2  size;
     .color("tint", sample.color),         // vec4  tint;
+    .float2Array("points", points),       // vec2  points(int i); int pointsCount;
 ])
 ```
 
 Scalars and vectors (`.float`, `.float2/3/4`, `.color`) are plain variables
-in the body; an array is read through `name(i)` with `nameCount` beside it
-(reads are clamped to the array, an empty one reads as zero). They live in
-a storage buffer, so an array can be long. A change to a value
+in the body; an array (`.floatArray`, `.float2/3/4Array`) is read through
+`name(i)` with `nameCount` beside it (reads are clamped to the array, an
+empty one reads as zero). Vectors are `Float2`/`Float3`/`Float4` — plain
+`Float` fields, so an array of them is copied into the buffer as the bytes
+it already is. They live in a storage buffer, so an array can be long.
+PyShader takes everything but the vector arrays. A change to a value
 re-dispatches the shader — a shader that reads no clock is otherwise drawn
 once — while the *set* of names and kinds is part of the compiled
 pipeline, so keep that stable and vary the values. `.shader(_:arguments:)`
