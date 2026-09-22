@@ -21,6 +21,12 @@
 //  place of the compute one: its image is a colour attachment drawn by a
 //  render pass, and composited exactly like the others.
 //
+//  The canvases themselves — a `.shader` layer's, and the per-view nodes of
+//  `.drawingGroup()` / `ThorCanvas` — are `RenderNodeManager`'s, which this
+//  registry owns and drives through the same pass lifecycle; one pool of
+//  ThorVG canvases serves both. Slots and nodes are composited in the order
+//  the tree placed them (`nextPaintOrder`), not the order they were built.
+//
 
 import CVulkan
 import VulkanCore
@@ -145,28 +151,20 @@ final class ShaderSlotRegistry {
 
     /// The view side of a `.shader(_:)` slot: a ThorVG canvas the size of the
     /// view, rasterized whenever the view draws something different, and
-    /// sampled by the slot's compute shader as `uContent`.
-    final class Layer {
-        let node: ThorShaderNode<NucleantRenderNode>
-        let container: NucleantRenderNode
-        let renderer: ThorDisplayRenderer
-        /// What the canvas currently holds, and where the view was when it
-        /// was drawn — an identical list at the same place is not drawn again.
-        var content: DisplayList?
-        var origin: Point = .zero
-
-        init(
-            node: ThorShaderNode<NucleantRenderNode>,
-            container: NucleantRenderNode,
-            renderer: ThorDisplayRenderer
-        ) {
-            self.node = node
-            self.container = container
-            self.renderer = renderer
-        }
-    }
+    /// sampled by the slot's compute shader as `uContent`. A per-view canvas
+    /// node that is never composited — `content` and `origin` are what it
+    /// holds and where the view was when it was drawn; an identical list at
+    /// the same place is not drawn again.
+    typealias Layer = RenderNodeManager.CanvasNode
 
     private unowned let engine: NucleantRenderEngine
+
+    /// The per-view render nodes (and the canvas pool the layers share),
+    /// the painter that fills the automatic image nodes, and the
+    /// boundaries a pass's drawing splits at.
+    let renderNodes: RenderNodeManager
+    let painter: NodePainter
+    let boundaries: RenderBoundaries
 
     /// Keyed by the view's structural path — the same identity `@State` uses,
     /// so a shader keeps its pipeline across rebuilds and loses it only when
@@ -174,28 +172,31 @@ final class ShaderSlotRegistry {
     private var slots: [[Int]: Slot] = [:]
 
     /// Backing-store pixels per point.
-    var scale: Double = 1
+    var scale: Double = 1 {
+        didSet {
+            renderNodes.scale = scale
+            painter.scale = scale
+        }
+    }
 
     /// Slots detached from the engine but not yet freed — see `endPass`.
     private var pendingDestroy: [Slot] = []
 
-    /// Canvases from retired `.shader` slots, kept for the next one to
-    /// appear. A ThorVG GPU canvas costs ~60ms to bring up (its renderer
-    /// compiles pipelines the first time it is given a target) and under a
-    /// millisecond to retarget, so a canvas is never thrown away while a
-    /// spare might be wanted: scrolling a gallery of effects in and out of
-    /// view, or resizing a window, reuses these.
-    private var spareLayers: [Layer] = []
-    private let spareLayerLimit = 8
-
     init(engine: NucleantRenderEngine) {
         self.engine = engine
+        self.renderNodes = RenderNodeManager(engine: engine)
+        self.painter = NodePainter(engine: engine, nodes: renderNodes)
+        self.boundaries = RenderBoundaries(nodes: renderNodes, painter: painter)
     }
 
     // MARK: - Layout-pass lifecycle
 
-    func beginPass() {
+    /// `windowSize` is the window's content size in points — what bounds a
+    /// per-view node's image.
+    func beginPass(windowSize: Size) {
         for slot in slots.values { slot.used = false }
+        renderNodes.beginPass(windowSize: windowSize)
+        boundaries.beginPass()
     }
 
     /// Called from `ShaderContent.place`: make sure a slot exists for this
@@ -267,6 +268,9 @@ final class ShaderSlotRegistry {
         let pixelWidth = max(1, Int((rect.width * scale).rounded()))
         let pixelHeight = max(1, Int((rect.height * scale).rounded()))
 
+        // This slot's place in the composite order is where the tree placed
+        // it, whether the GPU objects are kept or rebuilt below.
+        let order = renderNodes.nextPaintOrder()
         var previous: Slot?
         var canvas: Layer?
         if let existing = slots[path] {
@@ -283,6 +287,7 @@ final class ShaderSlotRegistry {
                existing.backend.argumentCapacity >= arguments.packed.count,
                (existing.layer != nil) == withLayer {
                 upload(arguments, to: existing)
+                composite(existing, at: order)
                 return existing
             }
             // Retire it the way `endPass` does — detach now, free at the top
@@ -321,8 +326,18 @@ final class ShaderSlotRegistry {
         }
         place(slot, rect: rect, clip: clip)
         upload(arguments, to: slot)
+        composite(slot, at: order)
         slots[path] = slot
         return slot
+    }
+
+    /// File the slot — and its layer canvas just before it, so the engine
+    /// draws the canvas before the shader samples it — at `order`.
+    private func composite(_ slot: Slot, at order: Int) {
+        if let layer = slot.layer {
+            renderNodes.composite(layer.container, at: order, layer: true)
+        }
+        renderNodes.composite(slot.container, at: order)
     }
 
     /// Hand the slot its argument values if they changed, and make it draw
@@ -389,6 +404,13 @@ final class ShaderSlotRegistry {
         if retired > 0 {
             PerfTrace.trace("shader slots: retired \(retired) in \(PerfTrace.millis(since: started))")
         }
+        // Retire the per-view nodes no view pulled, paint the images with
+        // new content, then put the engine's list in this pass's paint
+        // order — slots included.
+        renderNodes.retireUnused()
+        boundaries.endPass()
+        painter.paintPending()
+        renderNodes.endPass()
     }
 
     /// Take a slot out of the engine now and queue its GPU objects for
@@ -417,6 +439,8 @@ final class ShaderSlotRegistry {
     @discardableResult
     func tick(_ delta: Double, pointer: Point) -> Bool {
         releasePending()
+        renderNodes.releasePending()
+        painter.frameWillDraw()
         guard !slots.isEmpty else { return false }
         for slot in slots.values {
             slot.elapsed += delta
@@ -454,9 +478,8 @@ final class ShaderSlotRegistry {
         }
         slots.removeAll()
         releasePending()
-        vkDeviceWaitIdle(engine.device)
-        for layer in spareLayers { destroy(layer) }
-        spareLayers.removeAll()
+        painter.destroy()
+        renderNodes.destroyAll()
     }
 
     /// Free everything retired by a previous pass. Called at the top of a
@@ -610,37 +633,15 @@ final class ShaderSlotRegistry {
     /// changed, but never composited — `compositesToWindow` is what keeps its
     /// image off the swapchain and its size off the window's.
     ///
-    /// `reusing` (or a spare) is retargeted in place rather than rebuilt: the
-    /// canvas keeps its renderer, gets a new image at the new size, and its
-    /// slot keeps its identity in the engine.
+    /// `reusing` (or a spare from the shared pool) is retargeted in place
+    /// rather than rebuilt: the canvas keeps its renderer, gets a new image
+    /// at the new size, and its slot keeps its identity in the engine.
     private func makeLayer(width: Int, height: Int, reusing handed: Layer?) -> Layer? {
-        if let layer = handed ?? spareLayers.popLast() {
-            if engine.resizeThorNode(layer.node, id: layer.container.id, width: width, height: height) {
-                layer.content = nil
-                layer.renderer.scale = scale
-                layer.container.needsRender = true
-                engine.append(layer.container)
-                return layer
-            }
-            // Left at its old size, which is no use here — replace it.
-            destroy(layer)
-        }
-        guard let node = engine.makeThorWidgetNode(width: width, height: height) else {
-            fflush(stdout)
-            fputs("NucleantSwiftUI: layer canvas build (\(width)x\(height)) failed\n", stderr)
+        guard let layer = renderNodes.acquire(width: width, height: height, reusing: handed) else {
             return nil
         }
-        let container = NucleantRenderNode(
-            id: Int.random(in: Int.min...Int.max),
-            context: .thor(node)
-        )
-        container.compositesToWindow = false
-        container.observeContext()
-        engine.append(container)
-
-        let renderer = ThorDisplayRenderer(canvas: node.canvas.base)
-        renderer.scale = scale
-        return Layer(node: node, container: container, renderer: renderer)
+        layer.container.compositesToWindow = false
+        return layer
     }
 
     /// Free one retired slot. The caller has already detached it from the
@@ -691,24 +692,10 @@ final class ShaderSlotRegistry {
         case colorAttachment
     }
 
-    /// Keep a canvas that is no longer in use for the next `.shader` slot,
-    /// emptied of its paints; past the limit it is freed.
+    /// Hand a canvas that is no longer in use back to the shared pool,
+    /// emptied of its paints; past the pool's limit it is freed.
     private func recycle(_ layer: Layer) {
-        guard spareLayers.count < spareLayerLimit else {
-            destroy(layer)
-            return
-        }
-        _ = tvg_canvas_remove(layer.node.canvas.base, nil)
-        layer.content = nil
-        spareLayers.append(layer)
-    }
-
-    /// The canvas first: ThorVG holds its own reference to the wgpu texture
-    /// behind the node's image for as long as it is the canvas's target, and
-    /// the node's teardown releases that texture last.
-    private func destroy(_ layer: Layer) {
-        _ = tvg_canvas_destroy(layer.node.canvas.base)
-        layer.node.destroyResources(engine)
+        renderNodes.recycle(layer)
     }
 
     /// The image a slot's shader writes and the composite samples.

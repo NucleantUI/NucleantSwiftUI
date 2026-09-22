@@ -209,7 +209,24 @@ public struct DisplayList: Equatable, Sendable {
         commands.append(command)
     }
 
+    public mutating func append(contentsOf other: DisplayList) {
+        commands.append(contentsOf: other.commands)
+    }
+
     public var isEmpty: Bool { commands.isEmpty }
+
+    /// The same list drawn `(dx, dy)` further along — how a view's absolute
+    /// commands become local to its own render node, so that the node's
+    /// content compares equal across passes that only *moved* the view.
+    func translated(dx: Double, dy: Double) -> DisplayList {
+        guard dx != 0 || dy != 0 else { return self }
+        var copy = DisplayList()
+        copy.commands.reserveCapacity(commands.count)
+        for command in commands {
+            copy.commands.append(command.translated(dx: dx, dy: dy))
+        }
+        return copy
+    }
 }
 
 /// The ambient state a node draws under: inherited opacity, clip and
@@ -222,6 +239,30 @@ public struct DrawContext: Sendable {
     public var clipCornerRadius: Double = 0
     /// The appearance dynamic colors resolve against here.
     public var colorScheme: ColorScheme = .light
+
+    /// True while the list being filled is a *capture* that wants every
+    /// pixel of the subtree in it — a `.shader` layer, a `.hidden()` view's
+    /// discard, a drag snapshot. A `.drawingGroup()` inside then draws
+    /// inline instead of into a node of its own, which would composite over
+    /// the capture rather than into it.
+    var flattensRenderNodes = false
+
+    /// The clip of the containers above the nearest enclosing render node,
+    /// which took it out of `clip` so its content compares equal as it
+    /// scrolls under the clip and cuts it at the composite instead. A node
+    /// or shader slot inside is cut by this and by `clip` both.
+    var nodeClip: Rect?
+
+    /// What a render node or shader slot placed here is cut to at the
+    /// composite: every clip above it, whichever node took it over.
+    var compositeClip: Rect? {
+        switch (clip, nodeClip) {
+        case (let clip?, let outer?): return clip.intersection(outer)
+        case (let clip?, nil): return clip
+        case (nil, let outer?): return outer
+        case (nil, nil): return nil
+        }
+    }
 
     public init() {}
 

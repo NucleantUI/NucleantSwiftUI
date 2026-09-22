@@ -545,16 +545,82 @@ once, and again only when the view under it repaints; one that does runs
 every frame. Effects do not nest — a `Shader` view or a second `.shader`
 inside one is composited over the effect's output, not through it.
 
+## Render nodes
+
+A view that changes gets a render node of its own, automatically: once a
+change has originated at a view — it read `@State` in its body, or an
+`@Observable` property it read was written — what that view draws goes
+into an image of its own, composited into place and repainted only when
+*its* content changes. Turning a knob repaints the knob (and the label
+reading the same value), not the window; moving a node (a scroll) repaints
+nothing; a change elsewhere leaves it alone. Views that only pass values
+down never become nodes — their drawing lands in the nearest node above,
+or the window canvas — so a screen has as many nodes as it has things that
+change. The first change to a view still repaints the window once, since
+it was drawn there.
+
+A node's image is what the view painted, not its frame (a glow past the
+frame is kept; a wide frame with a small drawing costs a small image), cut
+by the container's clip at the composite. A node whose drawing changed in
+one place — a panel whose body reads a value for one label — repaints
+that place, not the panel. Whatever a view draws *after* a
+nested node and over it — a `ZStack` stroke over a hot meter — is put in
+an image ordered after that node, so paint order holds. Popovers, context
+menus and the drag preview are a node over everything. Nodes share one
+ThorVG canvas: an image costs microseconds, and one change is one small
+ThorVG pass however big the window.
+
+`.drawingGroup()` still exists for the explicit case — a subtree that
+should be one image whether or not anything in it reads state:
+
+```swift
+VStack { ForEach(tracks) { TrackRow($0) } }
+    .cornerRadius(10)     // clip inside the group, as for .shader
+    .drawingGroup()       // one image for the list, repainted only when its list changes
+```
+
+A group owns a ThorVG canvas of its own (~60ms the first time one appears;
+pooled after that), so it is for a few large subtrees, not for every row.
+
+`ThorCanvas` is a node the author draws into directly, with ThorVG paints
+that persist between frames:
+
+```swift
+ThorCanvas(
+    onInit: { context, size in          // once per node — the canvas is fresh
+        let bar = TCShape()
+        bar.set_fill_color(r: 255, g: 176, b: 64)
+        context.add(shape: bar)
+        shapes.bar = bar
+    },
+    renderer: { context, size in        // whenever something it read changed, or the size did
+        shapes.bar.reset()
+        shapes.bar.append_rect(pos: .zero, size: SIMD2(size.x * Float(level), 24))
+    }
+)
+.frame(height: 120)
+```
+
+`renderer` runs with its reads tracked like a `body`: `level` above is a
+`@State` read through the closure, so a change to it rebuilds this view
+alone and runs `renderer` again, then the node is rasterized. Sizes are
+canvas pixels (`context.scale` is pixels per point); `TCShape` / `TCScene`
+own their paint, so they survive the canvas dropping them and can be added
+again when `onInit` runs on a fresh node. `ThorCanvas(id:…)` starts over
+with a new node when `id` changes. `ThorCanvasRender(context:)` is the same
+with `onAppear` / `update` on an object of yours (`ThorRenderContext`) —
+make it `@Observable` and `update` re-runs when what it read changes.
+
 ## Seeing what the framework does
 
 Set these in the environment when running:
 
 | Variable | Prints |
 | --- | --- |
-| `NUCLEANT_SWIFTUI_TRACE_PERF=1` | per rebuild: kind, time, nodes built / reused, cache misses, `.shader` canvases redrawn |
-| `NUCLEANT_SWIFTUI_TRACE_PERF=2` | …plus every view built or reused, with the reason it was not reused, and each shader slot built with its cost |
+| `NUCLEANT_SWIFTUI_TRACE_PERF=1` | per rebuild: kind, time, nodes built / reused, cache misses, `.shader` canvases (`layers=`) and render nodes (`nodes=`) repainted, and `window` when the window canvas was — a knob turn should read `nodes=1` or `2` and no `window` |
+| `NUCLEANT_SWIFTUI_TRACE_PERF=2` | …plus every view built or reused, with the reason it was not reused, and each shader slot or canvas node built with its cost |
 | `NUCLEANT_SWIFTUI_TRACE_INPUT=1` | hit testing — what each press landed on |
-| `NUCLEANT_SWIFTUI_TRACE_LAYOUT=1` | the placed display list, rect by rect |
+| `NUCLEANT_SWIFTUI_TRACE_LAYOUT=1` | the placed display list, rect by rect, each render node's frame and image size, and the overlay's list |
 
 A rebuild happens only when state changed, and only from the views that
 own or read that state downward; children whose inputs are unchanged keep

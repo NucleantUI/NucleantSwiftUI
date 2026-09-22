@@ -45,6 +45,11 @@ public struct ViewIDMacro: ExpressionMacro {
 ///   #viewID`. (The usual source of the call site is `ViewBuilder`, which
 ///   stamps every view expression in a body; the parameter covers views
 ///   constructed outside one.)
+///
+/// A stored closure is left out of `_isEquivalent(to:)`: there is nothing
+/// to compare two closures by, and a view whose only difference is a closure
+/// is treated as unchanged — see `Core/ViewID.swift` for what that asks of
+/// the closure.
 public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
 
     // MARK: Extension
@@ -130,16 +135,6 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
         let access = accessPrefix(of: structDecl.modifiers)
         let properties = storedProperties(of: structDecl)
 
-        // A closure has no equality, so a view storing one is rebuilt every
-        // time its parent is. Say so at the declaration, where it can be
-        // designed around, rather than leaving it to a perf trace.
-        for property in properties where property.isFunctionTyped {
-            context.diagnose(Diagnostic(
-                node: property.node,
-                message: ViewMacroMessage.storedClosure(property.name, typeName: structDecl.name.text)
-            ))
-        }
-
         var members: [DeclSyntax] = []
 
         // Declaration-site identity by default; the generated init below
@@ -165,11 +160,16 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
     ///
     /// `@State` is skipped: it lives in the store, not the struct, and a
     /// write to it dirties the owner directly. `@Environment` is skipped
-    /// because the environment is compared separately by the builder. Every
-    /// other wrapper is compared through its backing storage, which is where
-    /// `Binding` keeps the source it points at.
+    /// because the environment is compared separately by the builder. A
+    /// closure is skipped because two closures cannot be compared at all:
+    /// rather than making the view "never equivalent" (and so rebuilt every
+    /// time its parent is), a closure counts for nothing, and the view is
+    /// as equivalent as its other properties say. Every other wrapper is
+    /// compared through its backing storage, which is where `Binding` keeps
+    /// the source it points at.
     private static func equivalenceFunction(access: String, properties: [StoredProperty]) -> DeclSyntax {
         let checks = properties.compactMap { property -> String? in
+            if property.isFunctionTyped { return nil }
             switch property.wrapper {
             case "State", "Environment":
                 return nil
@@ -222,10 +222,14 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
         for property in properties {
             guard let type = property.type else { continue }
             if !property.isPublic { initAccess = "" }
+            // A closure parameter is non-escaping by default and so can't be
+            // stored — in the struct or in a wrapper's `wrappedValue`; an
+            // optional function type is already escaping.
+            let escaping = property.isFunctionTyped && !property.isOptional ? "@escaping " : ""
             switch property.wrapper {
             case "State":
                 let defaultValue = property.initializer.map { " = \($0)" } ?? ""
-                parameters.append("\(property.name): \(type)\(defaultValue)")
+                parameters.append("\(property.name): \(escaping)\(type)\(defaultValue)")
                 assignments.append("self._\(property.name) = State(wrappedValue: \(property.name))")
             case "Binding":
                 parameters.append("\(property.name): Binding<\(type)>")
@@ -237,14 +241,11 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
                 // An unknown wrapper: take the wrapped value if it has no
                 // initializer of its own, the same bet the compiler makes.
                 guard property.initializer == nil else { continue }
-                parameters.append("\(property.name): \(type)")
+                parameters.append("\(property.name): \(escaping)\(type)")
                 assignments.append("self._\(property.name) = \(other)(wrappedValue: \(property.name))")
             case .none:
                 if property.isLet && property.initializer != nil { continue }
                 let defaultValue = property.initializer.map { " = \($0)" } ?? ""
-                // A closure parameter is non-escaping by default and so can't
-                // be stored; an optional function type is already escaping.
-                let escaping = property.isFunctionTyped && !property.isOptional ? "@escaping " : ""
                 parameters.append("\(property.name): \(escaping)\(type)\(defaultValue)")
                 assignments.append("self.\(property.name) = \(property.name)")
             }
@@ -350,16 +351,11 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
 
 enum ViewMacroMessage: DiagnosticMessage {
     case notAStruct
-    case storedClosure(String, typeName: String)
 
     var message: String {
         switch self {
         case .notAStruct:
             return "@View can only be applied to a struct"
-        case .storedClosure(let name, let typeName):
-            return "'\(name)' is a closure, so no two '\(typeName)' values are ever equivalent and "
-                + "this view is rebuilt whenever its parent is; take a Binding or a value instead "
-                + "if the parent re-runs often"
         }
     }
 
@@ -367,15 +363,12 @@ enum ViewMacroMessage: DiagnosticMessage {
         switch self {
         case .notAStruct:
             return MessageID(domain: "NucleantSwiftUIMacros", id: "notAStruct")
-        case .storedClosure:
-            return MessageID(domain: "NucleantSwiftUIMacros", id: "storedClosure")
         }
     }
 
     var severity: DiagnosticSeverity {
         switch self {
         case .notAStruct: return .error
-        case .storedClosure: return .warning
         }
     }
 }

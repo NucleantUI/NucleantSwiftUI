@@ -93,6 +93,8 @@ struct ShaderEffectContent: NodeContent {
         var inner = context
         inner.clip = nil
         inner.clipCornerRadius = 0
+        // The texture is the view: a drawing group inside draws into it.
+        inner.flattensRenderNodes = true
         // The list so far is everything painted beneath this view; the
         // layer's canvas is only the view's rect, so the rest is clipped
         // away by ThorVG.
@@ -103,8 +105,9 @@ struct ShaderEffectContent: NodeContent {
             function: function,
             arguments: arguments,
             rect: rect,
-            clip: context.clip,
+            clip: context.compositeClip,
             content: content
         )
+        host.boundaries.noteNested(at: list.commands.count, rect: context.compositeClip.map { rect.intersection($0) } ?? rect)
     }
 }

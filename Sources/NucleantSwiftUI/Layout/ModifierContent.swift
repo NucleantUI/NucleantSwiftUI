@@ -238,9 +238,12 @@ struct OpacityContent: NodeContent {
 struct HiddenContent: NodeContent {
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
         // Still placed, so `frame` is set and layout is unchanged; the child's
-        // commands are simply thrown away.
+        // commands are simply thrown away — a drawing group's included, which
+        // would otherwise composite a node the view says is hidden.
         var discarded = DisplayList()
-        node.singleChild?.place(in: rect, proposal: proposal, context: context, into: &discarded)
+        var inner = context
+        inner.flattensRenderNodes = true
+        node.singleChild?.place(in: rect, proposal: proposal, context: inner, into: &discarded)
     }
 }
 

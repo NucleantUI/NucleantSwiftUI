@@ -65,8 +65,17 @@ public macro viewID() -> ViewID = #externalMacro(module: "NucleantSwiftUIMacros"
 ///
 /// When the struct declares no initializer, one is generated with a trailing
 /// `_viewID: ViewID = #viewID` parameter, for views constructed outside a
-/// builder. A stored closure gets a warning: two values holding closures are
-/// never equivalent, so such a view is rebuilt whenever its parent is.
+/// builder.
+///
+/// A stored closure is not compared at all — there is nothing to compare two
+/// closures by — so a view whose only difference is a closure is *equivalent*
+/// and is kept. The closure the view then runs is the one from the build that
+/// created it: capture a `Binding`, a `@State` holder or a model object in it,
+/// never a plain value the parent may change (`{ delete(userID) }` with
+/// `userID` a `let` of the parent keeps the old id; `{ delete(model.userID) }`
+/// reads the live one). A view with nothing but closures — a canvas view — is
+/// equivalent to every other value of itself, which is the point: its work is
+/// driven by what its closures read, not by who re-ran the parent.
 ///
 /// The builder uses the result like SwiftUI does: when a parent's body re-runs
 /// and produces a child that is equivalent to the one already standing at the

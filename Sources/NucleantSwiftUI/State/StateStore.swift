@@ -153,6 +153,11 @@ final class DependencyTracker {
         reads[path, default: [:]][ObjectIdentifier(storage)] = storage
     }
 
+    /// Whether the view at `path` has read any slot so far in its build.
+    func hasReads(for path: [Int]) -> Bool {
+        !(reads[path]?.isEmpty ?? true)
+    }
+
     /// The slots the view at `path` read, handed over once for its record.
     func takeReads(for path: [Int]) -> [any AnyStateStorage] {
         guard let taken = reads.removeValue(forKey: path) else { return [] }

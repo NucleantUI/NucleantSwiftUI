@@ -1618,3 +1618,145 @@ cards beside it, the arrow's bounds 24 × 12 centred on the button; a
 press on a slider inside sets the slider and keeps the panel; a button
 inside sets the model and closes it; a press in the window's corner
 closes it without a choice.
+
+## 28. Render nodes per view
+
+The window's one ThorVG canvas was a misunderstanding of the engine — see
+[rendernode-per-view.md](rendernode-per-view.md) for the argument and the
+decisions. What landed, additively, beside it:
+
+`RenderNodeManager` (`App/RenderNodeManager.swift`) keeps a ThorVG canvas
+node per view that asked for one, keyed by structural path + `ViewIdentity`
+(type and stamped `ViewID`, which `BuildContext` now carries into
+`makeNode`) + an optional author `id`. Two ways to fill one: `.drawingGroup()`
+hands over the subtree's display list translated into the view's own
+coordinates (`DisplayList.translated`, on `DrawCommand.translated` from the
+drag preview), and the node repaints only when that list differs — so a
+scroll moves the node and paints nothing; `ThorCanvas` / `ThorCanvasRender`
+run the author's closures against the node's `Tvg_Canvas` (through
+`ThorContext`), once for `onInit` and again for `renderer` whenever the view
+was rebuilt or resized, with the closure's reads tracked on the view's path
+the way a body's are. Lifetime is the shader slots': not placed this pass ⇒
+retired at `endPass`, freed at the top of the next frame; the canvas goes to
+a pool `ShaderSlotRegistry` now shares for its `.shader` layers
+(`Layer` is `RenderNodeManager.CanvasNode`). Images are allocated in
+16px granules so a jittering frame keeps its image; `compositeRect` is the
+image at the pixel-snapped origin, `compositeScissor` the frame ∩ clip.
+
+Order: `engine.nodes` composites in list order, and slots used to land there
+in creation order. Every slot and node now takes a number as it is placed
+(`nextPaintOrder`) and `endPass` sorts the engine's list by it — the window
+canvas first, then tree paint order, a `.shader` layer just before the node
+that samples it. The host's overlay slot (popovers, context menu) plus the
+drag preview go into a capture (`OverlayCapture`) and become the topmost
+node, ordered where slot `[1]` began, so a menu opened over a group or a
+shader is over it. `ViewHost.update()` now returns whether the *window*
+canvas was repainted — its list is compared to what it holds — so a change
+inside a node no longer re-rasterizes the window; `HostingWindow` is
+untouched and simply told the truth.
+
+Three things found by running it:
+
+* **A paint changed in place is not repainted by `tvg_canvas_draw` alone** —
+  the docs say it "may" update implicitly; it did not. `tvg_canvas_update`
+  after the author's closures.
+* **The composite drops a viewport whose dimensions exceed the swapchain's.**
+  The overlay node, window-sized and rounded up to 912×624 over 900×620,
+  never appeared; the same node at 900×620, or with the viewport at the
+  frame's size, did. A *smaller* viewport hanging past an edge or a corner
+  is fine (a group pushed half off the right, the bottom, and both, all
+  drew). So images are capped at the window, and a view larger than the
+  window composites through an image of its visible part (frame ∩ clip ∩
+  window), shifted, and repaints on scroll like the window canvas would.
+* **`@View` and closures**: a stored closure is now skipped by
+  `_isEquivalent(to:)` rather than making the view never equivalent, and
+  the generated init marks a wrapped closure `@escaping` (the sketch's
+  `@State var onInit` did not compile). The trade is documented on `@View`:
+  capture references, not values.
+
+Verified with a throwaway scene kept outside the repo (the interactions
+run from a timer, since that session's host could post no input): a fader
+change inside the grouped list → `nodes=1`,
+no `window`; the counter → `window`, no nodes; the group moved → neither; the
+canvas slider → its node + window (its fader is outside the group); an
+`@Observable` beat → that node only, 0.9ms; a popover → the overlay node
+only, 73ms the first time and 2.2ms the next (pooled); a list taller than
+the window → a windowed node; `zoom:` to 1920×960 → one node repainted (the
+list whose visible part grew), the rest kept their images. The demo's main
+screen is pixel-identical to the build before this work.
+
+Not done then: `OverlayShaderNode` (post-processing a region of a parent's
+image, engine work) and automatic node-per-`@View` (the ~60ms canvas cost
+per fresh node decided that).
+
+### 28b. Automatic nodes
+
+TouchBayUI turned one knob and paid 58% CPU: it never opts in, and nothing
+made a user view a node on its own — the plan's point. Now `buildNode`
+wraps a user view in `RenderBoundaryContent` once a change can originate
+at it: it read `@State` in its body, or a rebuild started at its path
+(which is how an `@Observable` reader shows itself — observation only
+registers a handler that dirties the view's own path). Sticky per
+position (`Entry.isBoundary`); not for a transparent body or a
+window-covering view.
+
+Nodes own no canvas — ~72ms each, size-independent, was the whole reason
+the first step stayed opt-in. The engine's `ImageNode` (NucleantVulkan,
+`render_updates`) is a plain `VkImage` filled by a copy its own `update`
+records (`pendingCopy: ImageCopy`), behind a `.image` context case; every
+image whose content changed is drawn into one shared window-sized canvas
+node, the painter, packed on shelves in one ThorVG pass at `endPass`, and
+copied out in the frame: the painter is listed at order −1 and never
+composited (the `.shader` layer precedent), so its update — draw, sync,
+the real wait for wgpu — runs before the copies in the same command
+buffer, and the composite after. No extra submit; a pass that repaints
+the painter while the last frame's copies may still read it waits for
+that frame (`waitForPreviousFrame`). An image is the paint bounds of what
+the view drew (`PaintBounds.swift`), not its frame; the clip goes to the
+scissor so content compares equal under a scroll.
+
+First written the wrong way round (2026-09-22): the image node, the
+barriers, the copies, a wgpu fence resolved at run time — a thousand
+lines of rendering in `RenderNodeManager`, in the UI framework, around
+an engine that has a node model for exactly this. The lacks were the
+engine's and were filed there instead (`ImageNode`/`makeImageNode`; the
+wait in `WgpuContext.waitForGPUCompletion()` that on Apple waited for
+nothing, since this wgpu-native returns no native Metal queue — now the
+blocking `wgpuDevicePoll`, which BabyLights' invisible and stuck iPad
+buttons had traced to; `waitForPreviousFrame()`), and the manager split
+three ways: `RenderNodeManager` keeps refs, lifetime, pools and the
+engine's list order — nothing else; `NodePainter` packs and schedules;
+`RenderBoundaries` keeps the frame stack and splits runs. Views draw into
+the nodes they pull (`DrawingGroupContent`, `ThorCanvasContent`). No
+`vk*`/`wgpu*` call remains in NucleantSwiftUI's node code.
+
+A node whose list changed in a few commands repaints only the rect those
+commands touch (prefix/suffix diff → damage rect → the commands reaching
+into it, cut to it, copied into that region): the gallery view reads the
+XY pad's values for a label, so the *gallery* is the node that changes,
+and that drive is 27% with the partial paint against 60% without.
+
+What the enclosing view draws *after* a nested node and over it goes into
+an image of its own, ordered after that node (`Frame` / `Marker` /
+`splitRuns`, per command, transitive); the rest merges into the primary.
+The window list is the outermost frame (`endRootFrame`), the overlay slot
+a frame of its own — an image node now, so a popover costs no canvas.
+Every node kind reports itself into the enclosing frame (`noteNested`), so
+the "a later `ZStack` sibling has to be a group too" rule is gone.
+
+Measured in release on TouchBayUI's gallery, one control driven at 60Hz,
+same method before/after: idle 4.4 → 4.5%, knob 58 → 21%, slider 58 →
+23%, ADSR 56 → 21%, XY pad 64 → 27%. Screenshots identical bar 1px
+anti-aliased edges on nodes — the engine's straight-alpha composite over
+ThorVG's premultiplied output, which every non-opaque canvas node already
+had (`CompositePipeline.swift`, `srcColorBlendFactor`; NucleantVulkan's
+call). A stress scene (levels every tick, nodes added and removed, popover
+opening and closing) ran 60Hz for a minute without fault; memory growth
+under it is the same with the feature off.
+
+Found on the way, and older than this work: a pass-through wrapper
+(`Optional`, `if`) records its child's node as its own, and after a scoped
+rebuild of the child the wrapper's next reuse grafted the stale subtree
+back — a meter under an `if` showed its first-build value.
+`RebuildRecords.replaceNode` fixes the records when a child is swapped.
+Details in [rendernode-per-view.md](rendernode-per-view.md).

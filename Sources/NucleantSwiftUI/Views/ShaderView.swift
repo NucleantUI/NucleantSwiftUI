@@ -400,14 +400,15 @@ struct ShaderContent: NodeContent {
     }
 
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
-        guard rect.width > 0, rect.height > 0 else { return }
-        ShaderHost.current?.use(
+        guard rect.width > 0, rect.height > 0, let host = ShaderHost.current else { return }
+        host.use(
             path: path,
             function: function,
             arguments: arguments,
             rect: rect,
-            clip: context.clip
+            clip: context.compositeClip
         )
+        host.boundaries.noteNested(at: list.commands.count, rect: context.compositeClip.map { rect.intersection($0) } ?? rect)
     }
 }
 

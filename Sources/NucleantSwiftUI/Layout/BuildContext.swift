@@ -15,6 +15,12 @@ public struct BuildContext {
     /// `@State` identity is derived from it.
     var path: [Int] = []
 
+    /// The identity of the view whose `makeNode` is running — type and
+    /// stamped call site — so a builtin that owns a render node can key it
+    /// by the same identity the builder keys reuse by, not by path alone.
+    /// Set by `buildNode` just before it asks the view for its node.
+    var viewIdentity = ViewIdentity(type: ObjectIdentifier(Never.self), viewID: .unknown)
+
     var environment: EnvironmentValues
 
     /// The axis of the innermost enclosing stack, if any. `Spacer` and
@@ -57,6 +63,12 @@ public struct BuildContext {
         var sub = self
         sub.path.append(index)
         return body(&sub)
+    }
+
+    /// Whether a state write dirtied exactly `path` this frame — the view
+    /// there is where the change originated.
+    func isDirty(at path: [Int]) -> Bool {
+        dirtyPaths.value(at: path) != nil
     }
 
     /// Whether anything at or below `path` was dirtied this frame.
@@ -112,8 +124,8 @@ final class EffectQueue {
 
 
 /// What "the same view" means to the builder: the type, and the call site
-/// when the view carries one.
-struct ViewIdentity: Equatable {
+/// when the view carries one. Hashable so a render node can be keyed by it.
+struct ViewIdentity: Hashable {
     let type: ObjectIdentifier
     let viewID: ViewID
 }
@@ -218,13 +230,19 @@ final class RebuildRecords {
         /// Is this freshly built view equivalent to the one recorded?
         let isEquivalent: @MainActor (Any) -> Bool
         /// The node this position produced — what a rebuild splices out and
-        /// what a reuse hands back.
-        let node: ViewNode
+        /// what a reuse hands back. A pass-through wrapper (`Optional`, an
+        /// `if`) records its child's node as its own; `replaceNode` keeps
+        /// that true when the child is rebuilt on its own.
+        var node: ViewNode
         /// `@State` / `@Environment` slots this view bound.
         let stateKeys: [StateKey]
         /// State this view read while its body ran; each slot has this
         /// view's path among its readers.
         let reads: [any AnyStateStorage]
+        /// Whether this view draws into a render node of its own — see
+        /// `RenderBoundaryContent`. Sticky: carried over every rebuild of
+        /// the same view at this position.
+        var isBoundary = false
     }
 
     /// Entries for the tree as it stands.
@@ -288,6 +306,21 @@ final class RebuildRecords {
     }
 
     func entry(for path: [Int]) -> Entry? { live.value(at: path) }
+
+    /// A scoped rebuild put `replacement` where `old` stood at `path`. Every
+    /// ancestor that recorded `old` as its own node — a wrapper whose
+    /// `makeNode` hands back its child's node — now stands for the
+    /// replacement; left pointing at `old`, its next reuse would graft the
+    /// stale subtree back in.
+    func replaceNode(_ old: ViewNode, with replacement: ViewNode, above path: [Int]) {
+        var ancestor = path
+        while !ancestor.isEmpty {
+            ancestor.removeLast()
+            guard let node = live.node(at: ancestor), var entry = node.value, entry.node === old else { return }
+            entry.node = replacement
+            node.value = entry
+        }
+    }
 
     func node(for path: [Int]) -> ViewNode? { live.value(at: path)?.node }
 

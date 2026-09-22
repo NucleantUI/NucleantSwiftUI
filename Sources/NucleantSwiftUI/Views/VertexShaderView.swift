@@ -162,14 +162,15 @@ struct VertexShaderContent: NodeContent {
     }
 
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
-        guard rect.width > 0, rect.height > 0 else { return }
-        ShaderHost.current?.useGraphics(
+        guard rect.width > 0, rect.height > 0, let host = ShaderHost.current else { return }
+        host.useGraphics(
             path: path,
             function: function,
             draw: draw,
             arguments: arguments,
             rect: rect,
-            clip: context.clip
+            clip: context.compositeClip
         )
+        host.boundaries.noteNested(at: list.commands.count, rect: context.compositeClip.map { rect.intersection($0) } ?? rect)
     }
 }
