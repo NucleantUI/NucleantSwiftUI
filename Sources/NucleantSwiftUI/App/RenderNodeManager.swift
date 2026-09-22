@@ -33,7 +33,7 @@ import Dispatch
 struct RenderNodeKey: Hashable {
     let path: [Int]
     let identity: ViewIdentity
-    /// `ThorCanvas(id:)`'s value, hashed; 0 when there is none. A different
+    /// `ThorCanvas(id:)`'s value, hashed; the view's `ViewID` hashed when none is given. A different
     /// value is a different node. For an automatic node, the run index: 0
     /// for the view's primary image, k for the run after its k-th nested
     /// node when that run needs an image of its own.

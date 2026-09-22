@@ -20,7 +20,7 @@ public struct ThorCanvasRender<Context: ThorRenderContext> {
     let context: Context
 
     public init(context: Context, _viewID: ViewID = #viewID) {
-        self.nodeID = 0
+        self.nodeID = _viewID.hashValue
         self.context = context
         self._viewID = _viewID
     }
