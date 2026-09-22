@@ -13,29 +13,34 @@
 //  deciding whether the tree it built last time can be kept.
 //
 
-/// Where a view was constructed: file, line and column.
+/// Where a view was constructed: file, line and column, hashed at compile
+/// time by `#viewID`. Nothing at runtime needs the location back — only
+/// that two views from the same place get the same value and two from
+/// different places don't — so this is the hash alone: one `Int` to copy,
+/// compare and hash, no string. The value is fixed by the source, not by a
+/// per-process seed, so a view's keys are the same from one run to the next.
 public struct ViewID: Hashable, Sendable {
-    public let fileID: String
-    public let line: Int
-    public let column: Int
+    public let hash: Int
 
-    public init(fileID: String, line: Int, column: Int) {
-        self.fileID = fileID
-        self.line = line
-        self.column = column
+    public init(hash: Int) {
+        self.hash = hash
     }
 
     /// No call site: a view that was neither stamped by a builder nor made
     /// through a `@View` init. Identity then rests on position and type.
-    public static let unknown = ViewID(fileID: "", line: 0, column: 0)
+    public static let unknown = ViewID(hash: 0)
 }
 
-/// The identity of the place this is written.
+/// The identity of the place this is written, as a literal.
 ///
 /// Meant as a default argument — `_viewID: ViewID = #viewID` — where it is
-/// expanded at the *call* site (SE-0422). A plain initializer with `#line`
-/// defaults can't do that: nested magic literals name the line they are
-/// written on, which for a default argument is the declaration.
+/// expanded at the *call* site (SE-0422), the implicit call a `@ViewBuilder`
+/// body makes for each view expression included. A plain initializer with
+/// `#line` defaults can't do that: nested magic literals name the line they
+/// are written on, which for a default argument is the declaration. The
+/// macro sees the call site's file, line and column and expands to
+/// `ViewID(hash:)` of them — the hash is the compiler's work, not the
+/// program's.
 @freestanding(expression)
 public macro viewID() -> ViewID = #externalMacro(module: "NucleantSwiftUIMacros", type: "ViewIDMacro")
 

@@ -48,7 +48,7 @@ public struct ThorCanvas {
         renderer: @escaping (borrowing ThorContext, SIMD2<Float>) -> Void,
         _viewID: ViewID = #viewID
     ) {
-        self.nodeID = _viewID.hashValue
+        self.nodeID = _viewID.hash
         self.onInit = onInit
         self.renderer = renderer
         self._viewID = _viewID
