@@ -87,9 +87,10 @@ public struct NavigationStack<Root: View>: View {
     @State private var entries: [NavigationRouter.Entry] = []
     @State private var nextID: Int = 0
 
-    public init(_ title: String? = nil, @ViewBuilder root: () -> Root) {
+    public init(_ title: String? = nil, _viewID: ViewID = #viewID, @ViewBuilder root: () -> Root) {
         self.title = title
         self.root = root()
+        self._viewID = _viewID
     }
 
     public var body: some View {

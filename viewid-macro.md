@@ -158,10 +158,52 @@ numbers.
 
 ## Done (2026-09-22)
 
-All six steps in. Verified: debug build clean; macro dump shows
-`ViewID(hash: <literal>)` per call site and `public init(` on a public struct
-with an internal `let`; literals identical across two runs; BabyLights L1
-macOS 5/5 captures pixel-identical to the reference, build/reuse counts
-identical line for line. TouchBay release: knob 22.2–22.4% (was 22.5–22.8),
-slider 21.2% (was 21.6), idle 5.1% (same) — the string hash was a small
-slice; the win is mostly the simpler key.
+All six steps in, plus the correction below.
+
+## Correction: the fallback was a fixed hash (found by the user, same day)
+
+Step 4 as written had `@View` emit the *declaration's* location as the
+`_viewID` default. That is one value for every instance of the type — a
+constant dressed up as a call site. Worse, 17 of the framework's 20 `@View`
+structs (`Text`, `VStack`, `Spacer`, the shapes, …) declare their own init
+and none of them took `_viewID`, so every one of their instances carried that
+constant; they only came out right because `ViewBuilder.buildExpression`
+overwrites `_viewID` afterwards for anything written in a body. Outside a
+body — a view held in a `let`, built in a helper that is not a
+`@ViewBuilder` — the call site was simply lost. (The old code was no better:
+`= #viewID` inside the expansion resolved to the expansion buffer,
+`@__swiftmacro_….swift:1:30`, also constant. The change only made it
+visible.)
+
+Fixed three ways:
+
+1. `@View` now emits `var _viewID: ViewID = .unknown`. The declaration hash
+   said nothing the type did not already say — `ViewIdentity` and `StateKey`
+   both carry `ObjectIdentifier(V.self)` — so the honest value for "no call
+   site yet" is `.unknown`.
+2. `@View` warns on an init that does not take `_viewID`, with a fix-it that
+   inserts `_viewID: ViewID = #viewID` (before a trailing closure parameter,
+   so it can still be written trailing) and `self._viewID = _viewID`. The
+   macro cannot add a parameter to an init the author wrote, so it says so
+   instead. Verified against four init shapes, including a multi-line
+   parameter list with a `@ViewBuilder` closure last.
+3. All 19 flagged inits in the framework now take and store it.
+
+`Text("literal")` stays `.unknown` outside a body, and that is not fixable:
+a string literal resolves to `init(stringLiteral:)`, whose signature is the
+protocol's, and a witness may not carry an extra defaulted parameter
+(checked: "type does not conform"). In a body the builder stamps it.
+
+Verification after the correction: clean debug build, no warnings left in the
+framework; every construction shape gives a distinct value per call site
+(generated init, author init taking `_viewID`, framework inits, inside a
+body), `.unknown` only where it is genuinely unknowable; literals identical
+across runs; BabyLights L1 macOS 5/5 pixel-identical to the reference with
+build/reuse counts matching line for line. TouchBay release, second pass:
+knob 23.6–24.4%, slider 23.4%, idle 5.2% — user time unchanged from the
+first pass (15.0–15.6%), the rest is system time under a
+`WirelessRadioManagerd` pegged at 100% CPU during the run, so treat the
+first pass's knob 22.2–22.4% / slider 21.2% as the quiet-machine figure and
+neither pass as evidence of a change. The macro work is not a perf change
+worth a number: it removes a string construction and hash per view
+expression, which the first pass put inside its own noise.

@@ -13,11 +13,13 @@ public struct VStack<Content: View>: View {
     public init(
         alignment: HorizontalAlignment = .center,
         spacing: Double? = nil,
+        _viewID: ViewID = #viewID,
         @ViewBuilder content: () -> Content
     ) {
         self.alignment = alignment
         self.spacing = spacing
         self.content = content()
+        self._viewID = _viewID
     }
 
     public var body: Never { bodyUnavailable() }
@@ -50,11 +52,13 @@ public struct HStack<Content: View>: View {
     public init(
         alignment: VerticalAlignment = .center,
         spacing: Double? = nil,
+        _viewID: ViewID = #viewID,
         @ViewBuilder content: () -> Content
     ) {
         self.alignment = alignment
         self.spacing = spacing
         self.content = content()
+        self._viewID = _viewID
     }
 
     public var body: Never { bodyUnavailable() }
@@ -85,10 +89,12 @@ public struct ZStack<Content: View>: View {
 
     public init(
         alignment: Alignment = .center,
+        _viewID: ViewID = #viewID,
         @ViewBuilder content: () -> Content
     ) {
         self.alignment = alignment
         self.content = content()
+        self._viewID = _viewID
     }
 
     public var body: Never { bodyUnavailable() }

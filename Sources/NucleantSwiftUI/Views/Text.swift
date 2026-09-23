@@ -23,12 +23,14 @@ public struct Text: View {
     var alignment: TextAlignment?
     var explicitLineLimit: Int??
 
-    public init(_ content: String) {
+    public init(_ content: String, _viewID: ViewID = #viewID) {
         self.content = content
+        self._viewID = _viewID
     }
 
-    public init<S: StringProtocol>(_ content: S) {
+    public init<S: StringProtocol>(_ content: S, _viewID: ViewID = #viewID) {
         self.content = String(content)
+        self._viewID = _viewID
     }
 
     public var body: Never { bodyUnavailable() }
@@ -75,8 +77,11 @@ extension Text {
 }
 
 extension Text: @preconcurrency ExpressibleByStringLiteral {
+    /// A literal's own site is out of reach — the protocol fixes the
+    /// signature — so this leaves the identity unknown rather than passing
+    /// off this line as the call site. In a body the builder stamps it.
     public init(stringLiteral value: String) {
-        self.init(value)
+        self.init(value, _viewID: .unknown)
     }
 }
 

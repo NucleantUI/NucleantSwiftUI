@@ -19,8 +19,9 @@ public struct Image: View {
     public let image: RasterImage
     var isResizable = false
 
-    public init(_ image: RasterImage) {
+    public init(_ image: RasterImage, _viewID: ViewID = #viewID) {
         self.image = image
+        self._viewID = _viewID
     }
 
     public var body: Never { bodyUnavailable() }

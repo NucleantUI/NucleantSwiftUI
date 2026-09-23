@@ -164,24 +164,37 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
 
         var members: [DeclSyntax] = []
 
-        // Declaration-site identity by default; the generated init below
-        // overrides it with the call site. A hand-written init keeps this
-        // value unless it takes a `_viewID` parameter of its own. Hashed
-        // here from the struct's own location — a `#viewID` written into
-        // this expansion would see the expansion buffer, not the source.
-        let declared: ExprSyntax = context
-            .location(of: structDecl, at: .afterLeadingTrivia, filePathMode: .fileID)
-            .map(viewIDLiteral) ?? "ViewID.unknown"
-        members.append("\(raw: access)var _viewID: ViewID = \(declared)")
+        // No call site until something supplies one: the generated init
+        // below, an author's init taking `_viewID`, or `ViewBuilder`
+        // stamping the expression. Not the declaration's own location —
+        // that is one value for every instance of the type, and the type is
+        // already part of every identity the builder forms, so it would say
+        // nothing while looking like it did. (A `#viewID` written into this
+        // expansion is worse still: it sees the expansion buffer.)
+        members.append("\(raw: access)var _viewID: ViewID = .unknown")
 
         members.append(equivalenceFunction(access: access, properties: properties))
         members.append(bindingFunction(access: access, properties: properties))
 
-        let hasInitializer = structDecl.memberBlock.members.contains {
-            $0.decl.is(InitializerDeclSyntax.self)
+        let initializers = structDecl.memberBlock.members.compactMap {
+            $0.decl.as(InitializerDeclSyntax.self)
         }
-        if !hasInitializer {
+        if initializers.isEmpty {
             members.append(memberwiseInitializer(access: access, properties: properties))
+        }
+        // An init that does not take the call site cannot know it: a view it
+        // makes outside a `@ViewBuilder` body carries `.unknown`. The macro
+        // cannot add the parameter to an init the author wrote, so it says so.
+        for initializer in initializers where !takesViewID(initializer) {
+            context.diagnose(Diagnostic(
+                node: initializer.initKeyword,
+                message: ViewMacroMessage.initWithoutViewID,
+                fixIt: .replace(
+                    message: ViewMacroFixIt.addViewIDParameter,
+                    oldNode: initializer,
+                    newNode: withViewIDParameter(initializer)
+                )
+            ))
         }
         return members
     }
@@ -380,11 +393,18 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
 
 enum ViewMacroMessage: DiagnosticMessage {
     case notAStruct
+    case initWithoutViewID
 
     var message: String {
         switch self {
         case .notAStruct:
             return "@View can only be applied to a struct"
+        case .initWithoutViewID:
+            return """
+                this initializer cannot see where the view is constructed; \
+                views it makes outside a @ViewBuilder body have no call-site \
+                identity
+                """
         }
     }
 
@@ -392,14 +412,80 @@ enum ViewMacroMessage: DiagnosticMessage {
         switch self {
         case .notAStruct:
             return MessageID(domain: "NucleantSwiftUIMacros", id: "notAStruct")
+        case .initWithoutViewID:
+            return MessageID(domain: "NucleantSwiftUIMacros", id: "initWithoutViewID")
         }
     }
 
     var severity: DiagnosticSeverity {
         switch self {
         case .notAStruct: return .error
+        case .initWithoutViewID: return .warning
         }
     }
+}
+
+enum ViewMacroFixIt: FixItMessage {
+    case addViewIDParameter
+
+    var message: String { "add '_viewID: ViewID = #viewID' and store it" }
+
+    var fixItID: MessageID {
+        MessageID(domain: "NucleantSwiftUIMacros", id: "addViewIDParameter")
+    }
+}
+
+/// Does this initializer take the call site?
+private func takesViewID(_ initializer: InitializerDeclSyntax) -> Bool {
+    initializer.signature.parameterClause.parameters.contains {
+        ($0.secondName ?? $0.firstName).text == "_viewID"
+    }
+}
+
+/// The same initializer with `_viewID: ViewID = #viewID` added — before a
+/// trailing closure parameter, which has to stay last to still be written as
+/// one — and `self._viewID = _viewID` at the end of its body.
+private func withViewIDParameter(_ initializer: InitializerDeclSyntax) -> InitializerDeclSyntax {
+    var result = initializer
+    var parameters = Array(initializer.signature.parameterClause.parameters)
+    var parameter = FunctionParameterSyntax("_viewID: ViewID = #viewID")
+    if let last = parameters.last {
+        // A closure last in the list is the one a caller may write trailing,
+        // so the new parameter goes in front of it rather than after.
+        if isClosure(last.type) {
+            parameter.leadingTrivia = last.leadingTrivia
+            parameter.trailingComma = .commaToken(trailingTrivia: last.leadingTrivia.isEmpty ? .space : [])
+            parameters.insert(parameter, at: parameters.count - 1)
+        } else {
+            parameters[parameters.count - 1].trailingComma = .commaToken()
+            parameter.leadingTrivia = last.leadingTrivia.isEmpty ? .space : last.leadingTrivia
+            parameters.append(parameter)
+        }
+    } else {
+        parameters.append(parameter)
+    }
+    result.signature.parameterClause.parameters = FunctionParameterListSyntax(parameters)
+
+    if var body = result.body {
+        // Same line-up as the statement before it, or one level in when the
+        // body was empty.
+        let indent = body.statements.last?.leadingTrivia.indentation(isOnNewline: false)
+            ?? Trivia.spaces(8)
+        var statement: CodeBlockItemSyntax = "self._viewID = _viewID"
+        statement.leadingTrivia = .newline + indent
+        body.statements.append(statement)
+        if body.rightBrace.leadingTrivia.isEmpty {
+            body.rightBrace.leadingTrivia = .newline + (initializer.leadingTrivia.indentation(isOnNewline: false) ?? [])
+        }
+        result.body = body
+    }
+    return result
+}
+
+private func isClosure(_ type: TypeSyntax) -> Bool {
+    type.is(FunctionTypeSyntax.self)
+        || type.as(AttributedTypeSyntax.self).map { isClosure($0.baseType) } == true
+        || type.as(OptionalTypeSyntax.self).map { isClosure($0.wrappedType) } == true
 }
 
 @main

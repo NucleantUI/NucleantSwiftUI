@@ -3,105 +3,12 @@
 //  NucleantSwiftUI
 //
 
-/// A vertex + fragment shader pair, compiled once and reused.
+/// The older spelling of a vertex + fragment `ShaderFunction`.
 ///
-/// Where `ShaderFunction` runs a body once per pixel, this runs `vertex` once
-/// per vertex of every instance the view is asked to draw, and `fragment`
-/// once per pixel each triangle covers. There are no vertex buffers: the
-/// vertex stage places its geometry from `gl_VertexIndex`, `gl_InstanceIndex`
-/// and whatever `ShaderArgument`s the view was given, which is what makes
-/// "one quad per touch, from an array of touches" a single draw call.
-///
-/// The GLSL form takes the two bodies and the varyings that connect them —
-/// declared once, as `type name;` pairs, and usable as plain variables in both
-/// stages (`flat` for integer types):
-///
-/// ```swift
-/// let glow = VertexShaderFunction(
-///     varyings: "vec2 local; float seed;",
-///     vertex: """
-///         int t = gl_InstanceIndex * 3;
-///         vec2 corner = QUAD[gl_VertexIndex];
-///         vec2 centre = vec2(touches(t), touches(t + 1));
-///         gl_Position = vec4((centre + corner * 0.25) * 2.0 - 1.0, 0.0, 1.0);
-///         local = corner * 0.5 + 0.5;
-///         seed = touches(t + 2);
-///     """,
-///     fragment: """
-///         float d = distance(local, vec2(0.5));
-///         fragColor = vec4(vec3(fract(seed + time)), smoothstep(0.5, 0.0, d));
-///     """)
-/// ```
-///
-/// `time`, `resolution` and `mouse` are in scope in both stages, as are the
-/// arguments; `uv` and `fragCoord` in the fragment stage. Shader space is
-/// y-up as everywhere else: `gl_Position` is written as in OpenGL and flipped
-/// into Vulkan's clip space by the wrapper.
-///
-/// The PyShader form is one module with `vertex` returning a `class` whose
-/// first field is the `float4` position and whose other fields are the
-/// varyings, taken by `fragment` by name:
-///
-/// ```swift
-/// let glow = VertexShaderFunction(pyshader: """
-///     class V:
-///         position: float4
-///         local: float2
-///         seed: float
-///
-///     def vertex(vertex_index: int, instance_index: int, touches: FloatArray) -> V:
-///         ...
-///
-///     def fragment(local: float2, seed: float, time: float) -> float4:
-///         ...
-/// """)
-/// ```
-public struct VertexShaderFunction: Hashable, Sendable {
-
-    public let language: ShaderFunction.Language
-
-    /// File-scope declarations shared by both stages — helpers, constants.
-    /// Empty for PyShader, whose source is one module.
-    public let functions: String
-    /// `type name;` pairs the vertex stage writes and the fragment stage reads.
-    public let varyings: String
-    /// The vertex body — or, for PyShader, the whole module.
-    public let vertex: String
-    /// The fragment body; empty for PyShader.
-    public let fragment: String
-
-    public init(functions: String = "", varyings: String = "", vertex: String, fragment: String) {
-        self.language = .glsl
-        self.functions = functions
-        self.varyings = varyings
-        self.vertex = vertex
-        self.fragment = fragment
-    }
-
-    public init(pyshader source: String) {
-        self.language = .pyshader
-        self.functions = ""
-        self.varyings = ""
-        self.vertex = source
-        self.fragment = ""
-    }
-
-    /// Identity for the compiled-pipeline cache.
-    var source: String {
-        switch language {
-        case .glsl:
-            return [functions, varyings, vertex, fragment].joined(separator: "\n")
-        case .pyshader:
-            return "#pyshader\n" + vertex
-        }
-    }
-
-    /// Whether either stage reads anything that changes between frames —
-    /// same textual test as `ShaderFunction.isAnimated`.
-    var isAnimated: Bool {
-        ShaderFunction.mentionsClock(source)
-    }
-}
+/// There is one function type: `ShaderFunction(varyings:vertex:fragment:)`,
+/// or a PyShader module defining both stages, is a pair, and `isGraphics`
+/// says so — which is what lets `.shader(_:)` take either kind.
+public typealias VertexShaderFunction = ShaderFunction
 
 /// A view whose pixels are produced by a vertex + fragment pipeline on the GPU.
 ///
@@ -122,11 +29,18 @@ public struct VertexShader: View {
     /// - Parameters:
     ///   - vertices: vertices per instance; 6 is a quad as two triangles.
     ///   - instances: how many times the vertex stage runs over them.
-    public init(_ function: VertexShaderFunction, vertices: Int = 6, instances: Int = 1, arguments: [ShaderArgument] = []) {
+    public init(
+        _ function: VertexShaderFunction,
+        vertices: Int = 6,
+        instances: Int = 1,
+        arguments: [ShaderArgument] = [],
+        _viewID: ViewID = #viewID
+    ) {
         self.function = function
         self.vertices = vertices
         self.instances = instances
         self.arguments = arguments
+        self._viewID = _viewID
     }
 
     public var body: Never { bodyUnavailable() }
@@ -144,7 +58,7 @@ extension VertexShader: BuiltinView {
 }
 
 /// What one `VertexShader` draw covers.
-struct ShaderDraw: Equatable {
+struct ShaderDraw: Hashable {
     let vertices: Int
     let instances: Int
 }

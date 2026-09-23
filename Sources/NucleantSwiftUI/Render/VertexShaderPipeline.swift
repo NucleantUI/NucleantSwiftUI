@@ -7,11 +7,14 @@
 //  argument buffers — the same descriptor set as `ShaderPipeline` minus what
 //  a compute stage needs and a render pass in its place:
 //    binding 1 — uniform buffer (`ShaderUniforms`), both stages
+//    binding 2 — sampled image (the view's own pixels), for a `.shader` effect
 //    binding 3 — storage buffer (`ShaderArgument`s), both stages, when any
-//  Binding 0 (the storage image) and 2 (the sampled content) do not exist
-//  here: the output is the attachment, and there is no `.shader` effect form.
-//  Same one-set pool per shader, for the MoltenVK reason `ShaderPipeline`
-//  gives.
+//  Binding 0 (the storage image) does not exist here: the output is the
+//  attachment. Binding 2 is the same `uContent` a compute effect samples, so
+//  `.shader(_:)` over a vertex + fragment pair reads the view with the same
+//  `layer(uv)` — the difference being that the shader draws its own geometry
+//  over it, rather than one invocation per pixel. Same one-set pool per
+//  shader, for the MoltenVK reason `ShaderPipeline` gives.
 //
 
 import CVulkan
@@ -26,23 +29,34 @@ enum GraphicsShaderCode {
     case glsl(vertex: String, fragment: String)
     case spirv([UInt32], vertexEntryPoint: String, fragmentEntryPoint: String)
 
-    static func graphics(_ function: VertexShaderFunction, arguments: ShaderArguments) throws -> GraphicsShaderCode {
+    /// `samplesContent` adds the view's own pixels at binding 2 (`layer(uv)`),
+    /// as `ShaderCode.compute` does for a compute effect.
+    static func graphics(
+        _ function: ShaderFunction,
+        samplesContent: Bool = false,
+        arguments: ShaderArguments
+    ) throws -> GraphicsShaderCode {
         switch function.language {
         case .glsl:
+            // A `.glsl` function reaching here has a vertex stage: that is
+            // what `isGraphics` tested to send it down this path.
+            let stage = function.glslVertexStage ?? .init(varyings: "", body: "")
             let (vertex, fragment) = ShaderSource.graphics(
                 functions: function.functions,
-                varyings: function.varyings,
-                vertex: function.vertex,
-                fragment: function.fragment,
+                varyings: stage.varyings,
+                vertex: stage.body,
+                fragment: function.body,
+                samplesContent: samplesContent,
                 arguments: arguments
             )
             return .glsl(vertex: vertex, fragment: fragment)
         case .pyshader:
             let interface = GraphicsInterface.nucleantSwiftUI(
+                samplesContent: samplesContent,
                 arguments: try ShaderArgumentKind.kinds(of: arguments)
             )
             do {
-                let compiled = try PyShader.compile(function.vertex, target: .graphics(interface))
+                let compiled = try PyShader.compile(function.body, target: .graphics(interface))
                 return .spirv(compiled.spirv, vertexEntryPoint: compiled.vertexEntryPoint!, fragmentEntryPoint: compiled.entryPoint)
             } catch let error as PyShaderError {
                 throw ShaderError.compileFailed("PyShader: \(error)")
@@ -62,11 +76,18 @@ extension ShaderSource {
     /// the wrapper flips it into Vulkan's, so a quad placed at the top of
     /// shader space lands at the top of the view — matching what `uv` and
     /// `fragCoord` in the fragment stage, and in every compute `Shader`, mean.
+    ///
+    /// With `samplesContent` the fragment stage also gets the view's own
+    /// pixels as `uContent` (and ShaderToy's `iChannel0`) and `layer(uv)` to
+    /// read them — what `.shader(_:)` over a vertex + fragment pair is given.
+    /// Only the fragment stage: `texture()` needs derivatives, which a vertex
+    /// stage has none of.
     static func graphics(
         functions: String,
         varyings: String,
         vertex: String,
         fragment: String,
+        samplesContent: Bool = false,
         arguments: ShaderArguments
     ) -> (vertex: String, fragment: String) {
         let (argumentDeclarations, argumentLoads) = argumentSource(arguments)
@@ -116,9 +137,20 @@ extension ShaderSource {
             gl_Position.y = -gl_Position.y;
         }
         """
+        let content = samplesContent ? """
+        // The view this effect is applied to, rendered into its own texture
+        // and stored y-up like everything else in shader space — so
+        // `layer(uv)` is the view's pixel under the current one.
+        layout(binding = 2) uniform sampler2D uContent;
+        #define iChannel0 uContent
+        vec3 iChannelResolution[4];
+
+        vec4 layer(vec2 p) { return texture(uContent, p); }
+        """ : ""
         let fragmentSource = """
         \(common)
         \(ins)
+        \(content)
         layout(location = 0) out vec4 fragColor;
 
         void main() {
@@ -170,15 +202,24 @@ final class VertexShaderPipeline {
     private var arguments: BufferAndMemory?
     /// Floats the argument buffer can hold; 0 when there is none.
     let argumentCapacity: Int
+    /// Only with an `input`: how the fragment stage samples the view's pixels.
+    private var sampler: VkSampler?
+    /// Whether binding 2 exists — read by `createSetLayout`.
+    private let hasInput: Bool
 
+    /// `input` is the image the shader may sample at binding 2 — the canvas a
+    /// `.shader(_:)` effect drew its view into; `nil` for a generative
+    /// `VertexShader`.
     init(
         engine: NucleantRenderEngine,
         renderPass: VkRenderPass,
+        input: VkImageView? = nil,
         source: GraphicsShaderCode,
         argumentCapacity: Int = 0
     ) throws {
         self.device = engine.device
         self.argumentCapacity = argumentCapacity
+        self.hasInput = input != nil
         self.uniforms = engine.createBuffer(
             size: MemoryLayout<ShaderUniforms>.stride,
             usage: VkBufferUsageFlags(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT.rawValue)
@@ -213,6 +254,7 @@ final class VertexShaderPipeline {
         do {
             try createSetLayout()
             try createPipelineLayout()
+            if input != nil { try createSampler() }
             pipeline = try InstancedQuadPipeline.create(
                 device: device,
                 renderPass: renderPass,
@@ -220,7 +262,7 @@ final class VertexShaderPipeline {
                 vertex: vertex,
                 fragment: fragment
             )
-            try createDescriptorSet()
+            try createDescriptorSet(input: input)
         } catch {
             destroy()
             throw error
@@ -249,6 +291,7 @@ final class VertexShaderPipeline {
 
     /// Idempotent. The caller drains the GPU first.
     func destroy() {
+        if let sampler { vkDestroySampler(device, sampler, nil) }
         if let pipeline { vkDestroyPipeline(device, pipeline, nil) }
         if let pipelineLayout { vkDestroyPipelineLayout(device, pipelineLayout, nil) }
         if let setLayout { vkDestroyDescriptorSetLayout(device, setLayout, nil) }
@@ -256,6 +299,7 @@ final class VertexShaderPipeline {
         uniforms.destroy(device: device)
         arguments?.destroy(device: device)
         arguments = nil
+        sampler = nil
         pipeline = nil
         pipelineLayout = nil
         setLayout = nil
@@ -278,6 +322,17 @@ final class VertexShaderPipeline {
         uniform.stageFlags = Self.bothStages
 
         var bindings = [uniform]
+        if hasInput {
+            var input = VkDescriptorSetLayoutBinding()
+            input.binding = 2
+            input.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            input.descriptorCount = 1
+            // Both stages: the fragment reads it through `layer()`, and a
+            // PyShader module is one module, so the vertex entry point shares
+            // the global even when it never samples it.
+            input.stageFlags = Self.bothStages
+            bindings.append(input)
+        }
         if arguments != nil {
             var storage = VkDescriptorSetLayoutBinding()
             storage.binding = 3
@@ -307,10 +362,28 @@ final class VertexShaderPipeline {
         guard result == VK_SUCCESS else { throw ShaderError.vulkan("pipeline layout") }
     }
 
-    private func createDescriptorSet() throws {
+    /// Linear, clamped, as `ShaderPipeline`'s: a distortion that samples past
+    /// the edge gets the edge pixel rather than a wrapped copy of the far side.
+    private func createSampler() throws {
+        var info = VkSamplerCreateInfo()
+        info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO
+        info.magFilter = VK_FILTER_LINEAR
+        info.minFilter = VK_FILTER_LINEAR
+        info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+        info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+        info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+        guard vkCreateSampler(device, &info, nil, &sampler) == VK_SUCCESS else {
+            throw ShaderError.vulkan("sampler")
+        }
+    }
+
+    private func createDescriptorSet(input: VkImageView?) throws {
         var sizes = [
             VkDescriptorPoolSize(type: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, descriptorCount: 1),
         ]
+        if input != nil {
+            sizes.append(VkDescriptorPoolSize(type: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descriptorCount: 1))
+        }
         if arguments != nil {
             sizes.append(VkDescriptorPoolSize(type: VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, descriptorCount: 1))
         }
@@ -344,8 +417,14 @@ final class VertexShaderPipeline {
         argumentInfo.offset = 0
         argumentInfo.range = VkDeviceSize(VK_WHOLE_SIZE)
 
+        var inputInfo = VkDescriptorImageInfo()
+        inputInfo.sampler = sampler
+        inputInfo.imageView = input
+        inputInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+
         withUnsafePointer(to: &bufferInfo) { bufferPtr in
             withUnsafePointer(to: &argumentInfo) { argumentPtr in
+              withUnsafePointer(to: &inputInfo) { inputPtr in
                 var writeUniform = VkWriteDescriptorSet()
                 writeUniform.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
                 writeUniform.dstSet = descriptorSet
@@ -355,6 +434,16 @@ final class VertexShaderPipeline {
                 writeUniform.pBufferInfo = bufferPtr
 
                 var writes = [writeUniform]
+                if input != nil {
+                    var writeInput = VkWriteDescriptorSet()
+                    writeInput.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
+                    writeInput.dstSet = descriptorSet
+                    writeInput.dstBinding = 2
+                    writeInput.descriptorCount = 1
+                    writeInput.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                    writeInput.pImageInfo = inputPtr
+                    writes.append(writeInput)
+                }
                 if arguments != nil {
                     var writeArguments = VkWriteDescriptorSet()
                     writeArguments.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET
@@ -366,6 +455,7 @@ final class VertexShaderPipeline {
                     writes.append(writeArguments)
                 }
                 vkUpdateDescriptorSets(device, UInt32(writes.count), &writes, 0, nil)
+              }
             }
         }
     }

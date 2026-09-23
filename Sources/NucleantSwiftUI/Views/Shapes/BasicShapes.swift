@@ -6,7 +6,7 @@
 /// A rectangle filling its frame.
 @View
 public struct Rectangle: Shape {
-    public init() {}
+    public init(_viewID: ViewID = #viewID) { self._viewID = _viewID }
 
     public func path(in rect: Rect) -> Path {
         var path = Path()
@@ -30,9 +30,10 @@ public struct RoundedRectangle: Shape {
     public var cornerRadius: Double
     public var style: RoundedCornerStyle
 
-    public init(cornerRadius: Double, style: RoundedCornerStyle = .circular) {
+    public init(cornerRadius: Double, style: RoundedCornerStyle = .circular, _viewID: ViewID = #viewID) {
         self.cornerRadius = cornerRadius
         self.style = style
+        self._viewID = _viewID
     }
 
     public func path(in rect: Rect) -> Path {
@@ -53,7 +54,7 @@ extension RoundedRectangle: BuiltinView {
 /// dimension and centres, which is what keeps it round in a non-square box.
 @View
 public struct Circle: Shape {
-    public init() {}
+    public init(_viewID: ViewID = #viewID) { self._viewID = _viewID }
 
     public func path(in rect: Rect) -> Path {
         let diameter = min(rect.width, rect.height)
@@ -76,7 +77,7 @@ extension Circle: BuiltinView {
 /// An ellipse filling its frame.
 @View
 public struct Ellipse: Shape {
-    public init() {}
+    public init(_viewID: ViewID = #viewID) { self._viewID = _viewID }
 
     public func path(in rect: Rect) -> Path {
         var path = Path()
@@ -94,8 +95,9 @@ extension Ellipse: BuiltinView {
 public struct Capsule: Shape {
     public var style: RoundedCornerStyle
 
-    public init(style: RoundedCornerStyle = .circular) {
+    public init(style: RoundedCornerStyle = .circular, _viewID: ViewID = #viewID) {
         self.style = style
+        self._viewID = _viewID
     }
 
     public func path(in rect: Rect) -> Path {

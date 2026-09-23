@@ -68,27 +68,28 @@ final class ShaderSlotRegistry {
     /// What a view asks its slot to be.
     enum Request {
         case compute(ShaderFunction, withLayer: Bool)
-        case graphics(VertexShaderFunction, ShaderDraw)
+        case graphics(VertexShaderFunction, ShaderDraw, withLayer: Bool)
 
         /// Identity for the compiled pipeline; the kind is part of it, so a
         /// path that changes view type rebuilds.
         var source: String {
             switch self {
             case .compute(let function, _): return function.source
-            case .graphics(let function, _): return "#graphics\n" + function.source
+            case .graphics(let function, _, _): return "#graphics\n" + function.source
             }
         }
 
         var isAnimated: Bool {
             switch self {
             case .compute(let function, _): return function.isAnimated
-            case .graphics(let function, _): return function.isAnimated
+            case .graphics(let function, _, _): return function.isAnimated
             }
         }
 
         var withLayer: Bool {
-            if case .compute(_, let withLayer) = self { return withLayer }
-            return false
+            switch self {
+            case .compute(_, let withLayer), .graphics(_, _, let withLayer): return withLayer
+            }
         }
     }
 
@@ -215,11 +216,16 @@ final class ShaderSlotRegistry {
         rect: Rect,
         clip: Rect?
     ) {
-        guard let slot = slot(at: path, request: .graphics(function, draw), arguments: arguments, rect: rect, clip: clip),
-              case .graphics(let node, _) = slot.backend
+        guard let slot = slot(at: path, request: .graphics(function, draw, withLayer: false),
+                              arguments: arguments, rect: rect, clip: clip)
         else { return }
-        // Per-frame values, read by the next draw: no rebuild, just a redraw
-        // when they change.
+        redraw(slot, covering: draw)
+    }
+
+    /// The per-frame half of a graphics slot: how much the next draw covers.
+    /// No rebuild, just a redraw when it changes.
+    private func redraw(_ slot: Slot, covering draw: ShaderDraw) {
+        guard case .graphics(let node, _) = slot.backend else { return }
         let vertices = UInt32(draw.vertices), instances = UInt32(draw.instances)
         guard node.vertexCount != vertices || node.instanceCount != instances else { return }
         node.vertexCount = vertices
@@ -228,18 +234,27 @@ final class ShaderSlotRegistry {
     }
 
     /// Called from `ShaderEffectContent.place`: the slot for this view with
-    /// `content` — what the view drew this pass — in its canvas.
+    /// `content` — what the view drew this pass — in its canvas. `function`
+    /// says which pipeline reads it: a compute dispatch over every pixel, or
+    /// a vertex + fragment pair drawing `draw` over it.
     func useLayer(
         path: [Int],
         function: ShaderFunction,
+        draw: ShaderDraw,
         arguments: ShaderArguments,
         rect: Rect,
         clip: Rect?,
         content: DisplayList
     ) {
-        guard let slot = slot(at: path, request: .compute(function, withLayer: true), arguments: arguments, rect: rect, clip: clip),
+        let request: Request = function.isGraphics
+            ? .graphics(function, draw, withLayer: true)
+            : .compute(function, withLayer: true)
+        guard let slot = slot(at: path, request: request, arguments: arguments, rect: rect, clip: clip),
               let layer = slot.layer
         else { return }
+        if function.isGraphics {
+            redraw(slot, covering: draw)
+        }
         // Absolute coordinates, so a view that merely moved reads as changed
         // and is drawn again at its new place; the canvas transform absorbs
         // the origin, but the comparison does not.
@@ -567,7 +582,7 @@ final class ShaderSlotRegistry {
                 node.dirty = true
                 backend = .compute(node, pipeline)
                 context = .shader(node)
-            case .graphics(let function, let draw):
+            case .graphics(let function, let draw, _):
                 let pass = try colorPass()
                 let image = try makeImage(width: width, height: height, usage: .colorAttachment)
                 let node = try VertFragShaderNode<NucleantRenderNode>(
@@ -585,7 +600,12 @@ final class ShaderSlotRegistry {
                     pipeline = try VertexShaderPipeline(
                         engine: engine,
                         renderPass: pass.renderPass!,
-                        source: try GraphicsShaderCode.graphics(function, arguments: arguments),
+                        input: layer?.node.imageView,
+                        source: try GraphicsShaderCode.graphics(
+                            function,
+                            samplesContent: layer != nil,
+                            arguments: arguments
+                        ),
                         argumentCapacity: capacity
                     )
                 } catch {
