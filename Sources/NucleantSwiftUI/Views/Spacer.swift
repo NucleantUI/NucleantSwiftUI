@@ -8,8 +8,9 @@
 public struct Spacer: View {
     public let minLength: Double
 
-    public init(minLength: Double = 0) {
+    public init(minLength: Double = 0, _viewID: ViewID = #viewID) {
         self.minLength = minLength
+        self._viewID = _viewID
     }
 
     public var body: Never { bodyUnavailable() }
@@ -26,7 +27,7 @@ extension Spacer: BuiltinView {
 /// A hairline rule across the stack's cross axis.
 @View
 public struct Divider: View {
-    public init() {}
+    public init(_viewID: ViewID = #viewID) { self._viewID = _viewID }
 
     public var body: Never { bodyUnavailable() }
 }

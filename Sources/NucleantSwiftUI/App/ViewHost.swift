@@ -31,10 +31,26 @@ public final class ViewHost {
 
     /// Where the display list goes. `nil` until the window's ThorVG node
     /// exists, which is after the first `on_size` on some platforms.
-    public var renderer: ThorDisplayRenderer?
+    public var renderer: ThorDisplayRenderer? {
+        didSet { needsWindowRedraw = true }
+    }
 
-    /// GPU slots for `Shader` views, if the window has an engine yet.
+    /// GPU slots for `Shader` views — and the per-view render nodes — if the
+    /// window has an engine yet.
     var shaderSlots: ShaderSlotRegistry?
+
+    /// What the window canvas holds. A pass whose list comes out identical
+    /// — a change that landed entirely inside a per-view node — leaves the
+    /// canvas alone: no ThorVG scene rebuilt, nothing rasterized.
+    private var windowContent: DisplayList?
+
+    /// The canvas must be painted whatever the list says: it is new, or a
+    /// new target after a resize, or the host was told to start over.
+    private var needsWindowRedraw = true
+
+    /// What the overlay slot (popovers, the context menu) drew this pass,
+    /// composited as the topmost render node along with the drag preview.
+    private let overlay = OverlayCapture()
 
     /// Everything needed to rebuild any single view in place.
     private let records = RebuildRecords()
@@ -147,12 +163,15 @@ public final class ViewHost {
         // from the root. The *views* are unchanged, though, so the rebuild
         // that starts there mostly reuses what is standing and re-places it.
         needsFullRebuild = true
+        needsWindowRedraw = true
     }
 
     // MARK: - The frame tick
 
     /// Rebuild and repaint if anything asked for it. Returns true when the
-    /// canvas was redrawn, so the window knows to mark its render node dirty.
+    /// window canvas was redrawn, so the window knows to mark its render
+    /// node dirty — false when nothing changed, and also when what changed
+    /// landed entirely in per-view render nodes, which mark themselves.
     @discardableResult
     public func update() -> Bool {
         let work = Invalidator.shared.consume()
@@ -191,7 +210,7 @@ public final class ViewHost {
         }
 
         let built = PerfTrace.isEnabled ? DispatchTime.now().uptimeNanoseconds : 0
-        layoutAndRender()
+        let windowRedrawn = layoutAndRender()
 
         if PerfTrace.isEnabled {
             let now = DispatchTime.now().uptimeNanoseconds
@@ -201,7 +220,9 @@ public final class ViewHost {
                 + "(build \(String(format: "%.1f", building))ms) "
                 + "built=\(PerfTrace.nodesBuilt) reused=\(PerfTrace.nodesReused) "
                 + "measured=\(PerfTrace.sizeCalls) text=\(PerfTrace.textMeasures)"
-                + (PerfTrace.layersDrawn > 0 ? " layers=\(PerfTrace.layersDrawn)" : ""))
+                + (PerfTrace.layersDrawn > 0 ? " layers=\(PerfTrace.layersDrawn)" : "")
+                + (PerfTrace.nodesDrawn > 0 ? " nodes=\(PerfTrace.nodesDrawn)" : "")
+                + (windowRedrawn ? " window" : ""))
         }
 
         // Deferred to here so an `onAppear` body can read the state it was
@@ -210,12 +231,14 @@ public final class ViewHost {
         for action in effects.endPass() {
             action()
         }
-        return true
+        return windowRedrawn
     }
 
-    /// Force a full rebuild on the next `update()`.
+    /// Force a full rebuild on the next `update()`, and a repaint of the
+    /// window canvas with it.
     public func invalidate() {
         needsFullRebuild = true
+        needsWindowRedraw = true
         Invalidator.shared.invalidate()
     }
 
@@ -240,7 +263,10 @@ public final class ViewHost {
                 ContextMenuOverlay(anchor: menu.anchor, controller: menu.controller)
             }
         )
-        rootNode = buildNode(_HostRoot(content: root, overlay: AnyView(overlay)), &context)
+        rootNode = buildNode(
+            _HostRoot(content: root, overlay: AnyView(overlay), capture: self.overlay),
+            &context
+        )
         releaseDeparted()
     }
 
@@ -282,6 +308,7 @@ public final class ViewHost {
             releaseDeparted()
 
             parent.replaceChild(at: old.indexInParent, with: replacement)
+            records.replaceNode(old, with: replacement, above: path)
             // Every ancestor cached a size computed from the subtree just
             // replaced.
             parent.invalidateMeasurementsUpwards()
@@ -305,33 +332,69 @@ public final class ViewHost {
         effects.forget(paths: Set(departed.map { $0.0 }))
     }
 
-    private func layoutAndRender() {
-        guard let node = rootNode else { return }
+    /// Lay the tree out and paint it. Returns whether the window canvas was
+    /// redrawn.
+    private func layoutAndRender() -> Bool {
+        guard let node = rootNode else { return false }
 
-        // Shader views claim their slots during `place`; anything not claimed
-        // by the end of the pass has left the tree.
-        shaderSlots?.beginPass()
+        // Shader views and drawing groups claim their slots and nodes during
+        // `place`; anything not claimed by the end of the pass has left the
+        // tree.
+        shaderSlots?.beginPass(windowSize: size)
         ShaderHost.current = shaderSlots
         defer {
             ShaderHost.current = nil
             shaderSlots?.endPass()
         }
 
+        let window = Rect(origin: .zero, size: size)
         var list = DisplayList()
+        overlay.list = DisplayList()
+        overlay.order = nil
         node.place(
-            in: Rect(origin: .zero, size: size),
+            in: window,
             proposal: ProposedSize(size),
             context: DrawContext(colorScheme: environment.colorScheme),
             into: &list
         )
         // Over everything, and outside the tree: the preview is drawn, never
         // hit tested, so the destination under it is found through it.
-        dragSession?.draw(into: &list, colorScheme: environment.colorScheme)
+        dragSession?.draw(into: &overlay.list, colorScheme: environment.colorScheme)
+        if let shaderSlots {
+            // The overlay slot and the preview are the last thing painted,
+            // so they are a node of their own, over every other node; an
+            // empty list keeps no node at all.
+            shaderSlots.boundaries.useBoundary(
+                key: Self.overlayKey,
+                clip: nil,
+                frame: overlay.frame ?? RenderBoundaries.Frame(primaryOrder: overlay.order ?? shaderSlots.renderNodes.nextPaintOrder()),
+                content: overlay.list
+            )
+            // Whatever the window paints over a node placed before it
+            // leaves the window canvas for a node of its own.
+            shaderSlots.boundaries.endRootFrame(&list)
+        } else {
+            list.append(contentsOf: overlay.list)
+        }
         if LayoutTrace.isEnabled {
             LayoutTrace.dump(list)
+            if !overlay.list.isEmpty {
+                fputs("[layout] overlay:\n", stderr)
+                LayoutTrace.dump(overlay.list)
+            }
         }
+        guard needsWindowRedraw || windowContent != list else { return false }
+        needsWindowRedraw = false
+        windowContent = list
         renderer?.render(list)
+        return true
     }
+
+    /// The overlay node's identity: slot `[1]` of the root, whatever it holds.
+    private static let overlayKey = RenderNodeKey(
+        path: [1],
+        identity: ViewIdentity(type: ObjectIdentifier(_HostOverlay.self), viewID: .unknown)
+    )
 
     // MARK: - Input
 
@@ -683,9 +746,10 @@ enum InputTrace {
 /// The counters are cache *misses*, not calls: `built` is how many nodes were
 /// actually constructed, `measured` how many actually had to be sized, `text`
 /// how many strings actually had to be measured, `layers` how many `.shader`
-/// canvases had to be redrawn. `reused` is the one gain counter: subtrees
-/// grafted in from the previous pass. A rebuild whose miss numbers climb with
-/// every pass means something is defeating a cache.
+/// canvases had to be redrawn, `nodes` how many per-view render nodes, and
+/// `window` whether the window canvas itself was. `reused` is the one gain
+/// counter: subtrees grafted in from the previous pass. A rebuild whose miss
+/// numbers climb with every pass means something is defeating a cache.
 @MainActor
 enum PerfTrace {
     static let isEnabled = ProcessInfo.processInfo.environment["NUCLEANT_SWIFTUI_TRACE_PERF"] != nil
@@ -708,6 +772,10 @@ enum PerfTrace {
     /// `.shader` layers whose canvas was drawn again this pass — because the
     /// view under them drew something different, or moved.
     static var layersDrawn = 0
+    /// Per-view render nodes — automatic ones, `.drawingGroup()`,
+    /// `ThorCanvas`, the overlay — painted again this pass, because what
+    /// they hold changed.
+    static var nodesDrawn = 0
 
     static func reset() {
         textMeasures = 0
@@ -715,6 +783,7 @@ enum PerfTrace {
         nodesReused = 0
         sizeCalls = 0
         layersDrawn = 0
+        nodesDrawn = 0
     }
 
     static func log(_ message: @autoclosure () -> String) {

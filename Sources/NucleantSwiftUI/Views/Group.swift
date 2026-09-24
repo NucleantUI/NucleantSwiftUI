@@ -9,8 +9,9 @@
 public struct Group<Content: View>: View {
     public let content: Content
 
-    public init(@ViewBuilder content: () -> Content) {
+    public init(_viewID: ViewID = #viewID, @ViewBuilder content: () -> Content) {
         self.content = content()
+        self._viewID = _viewID
     }
 
     public var body: Never { bodyUnavailable() }

@@ -266,6 +266,9 @@ struct GroupContent: NodeContent {
 func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
     let path = context.path
     let identity = ViewIdentity(type: ObjectIdentifier(V.self), viewID: view._viewID)
+    // Whether the view standing here already drew into a node of its own;
+    // a fresh build of the same view keeps it (see `RenderBoundaryContent`).
+    var wasBoundary = false
 
     if let candidate = context.records.candidate(at: path) {
         let standing = candidate.entry
@@ -301,6 +304,8 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
         if replaced.identity != identity {
             context.store.release(replaced.stateKeys)
             context.effects.forget(paths: [path])
+        } else {
+            wasBoundary = replaced.isBoundary
         }
     } else {
         PerfTrace.trace("build \(path) \(V.self) — new")
@@ -315,8 +320,10 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
     DependencyTracker.shared.push(path)
     defer { DependencyTracker.shared.pop() }
 
-    let node: ViewNode
+    var node: ViewNode
+    var isBoundary = false
     if let builtin = view as? BuiltinView {
+        context.viewIdentity = identity
         node = builtin.makeNode(&context)
     } else {
         // The body's `@Observable` reads belong to this view. Only the body
@@ -325,7 +332,21 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
         // every ancestor that happened to be mid-build.
         let body = trackingObservation(at: path) { view.body }
         node = context.child(0) { sub in buildNode(body, &sub) }
+        // A user view that a change can originate at draws into a node of
+        // its own: it read `@State`, or this very build is the rebuild its
+        // own reads asked for. Not one whose body dissolves into the
+        // parent's layout (a `Group`, a `ForEach`): a node is one laid-out
+        // box.
+        isBoundary = (wasBoundary || context.isDirty(at: path) || DependencyTracker.shared.hasReads(for: path))
+            && !node.content.isTransparent
+        if isBoundary {
+            node = ViewNode(
+                content: RenderBoundaryContent(key: RenderNodeKey(path: path, identity: identity)),
+                children: [node]
+            )
+        }
     }
+    let reads = DependencyTracker.shared.takeReads(for: path)
 
     // Remember how to rebuild exactly this view in exactly this position, and
     // how to recognise it next time. Both closures capture the concrete view
@@ -343,7 +364,8 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
             },
             node: node,
             stateKeys: stateKeys,
-            reads: DependencyTracker.shared.takeReads(for: path)
+            reads: reads,
+            isBoundary: isBoundary
         ),
         at: path
     )

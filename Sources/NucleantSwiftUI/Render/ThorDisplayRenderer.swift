@@ -65,6 +65,39 @@ public final class ThorDisplayRenderer {
             _ = tvg_paint_set_transform(root, &matrix)
             scene = root
         }
+        emit(list)
+        if let scene {
+            _ = tvg_canvas_add(canvas, scene)
+            self.scene = nil
+        }
+    }
+
+    /// Replace the canvas contents with several lists side by side, each
+    /// shifted to its own pixel offset — the shared painter's batch: every
+    /// per-view node with new content drawn in one pass, to be copied out
+    /// into its own image. Each list is in its node's coordinates, its
+    /// origin at the node image's corner.
+    func render(packed items: [(list: DisplayList, x: Int, y: Int)]) {
+        _ = tvg_canvas_remove(canvas, nil)
+        scene = nil
+        for item in items {
+            guard let root = tvg_scene_new() else { continue }
+            // Pixel space, applied after `scale`. A scene rather than a
+            // per-paint offset so each paint's clipper moves with it.
+            var matrix = Tvg_Matrix(
+                e11: 1, e12: 0, e13: Float(item.x),
+                e21: 0, e22: 1, e23: Float(item.y),
+                e31: 0, e32: 0, e33: 1
+            )
+            _ = tvg_paint_set_transform(root, &matrix)
+            scene = root
+            emit(item.list)
+            _ = tvg_canvas_add(canvas, root)
+            scene = nil
+        }
+    }
+
+    private func emit(_ list: DisplayList) {
         for command in list.commands {
             switch command {
             case .shape(let draw):
@@ -74,10 +107,6 @@ public final class ThorDisplayRenderer {
             case .image(let draw):
                 emit(draw)
             }
-        }
-        if let scene {
-            _ = tvg_canvas_add(canvas, scene)
-            self.scene = nil
         }
     }
 

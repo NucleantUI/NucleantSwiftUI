@@ -15,14 +15,14 @@ public struct ViewBuilder {
     /// site is actually known, whatever initializer it went through. A
     /// `@View` struct stores it; the default setter on a plain `View` drops
     /// it, and that view is then identified by type and position alone.
+    /// `#viewID` expands at that implicit call, to a literal: no string, no
+    /// hashing, per expression per body run.
     public static func buildExpression<Content: View>(
         _ content: Content,
-        fileID: String = #fileID,
-        line: Int = #line,
-        column: Int = #column
+        _viewID: ViewID = #viewID
     ) -> Content {
         var content = content
-        content._viewID = ViewID(fileID: fileID, line: line, column: column)
+        content._viewID = _viewID
         return content
     }
 

@@ -29,18 +29,34 @@ NucleantApp (@main)
           ├ VulkanRenderEngine<NucleantRenderNode>  (NucleantVulkan)
           ├ one window-filling ThorShaderNode  (NucleantThorVG)
           │     ↑ display list replayed onto its Tvg_Canvas
+          ├ per user view a change originates at: an ImageNode (a VkImage)
+          │     the size of what it paints, filled through one shared painter
+          │     canvas and repainted only when its own list changes
+          ├ per `.drawingGroup()` view: a ThorShaderNode the size of its frame,
+          │     composited into it, repainted only when its own list changes
+          ├ per `ThorCanvas` / `ThorCanvasRender`: the same, filled by the
+          │     author's ThorVG paints
           ├ per `Shader` view: an OGLShaderNode composited into its rect
-          └ per `.shader(_:)` effect: a ThorShaderNode the view is drawn into
-                (never composited) + an OGLShaderNode that samples it
+          ├ per `.shader(_:)` effect: a ThorShaderNode the view is drawn into
+          │     (never composited) + an OGLShaderNode that samples it
+          └ the overlay slot (popovers, menus, drag preview): a node over all
                 │
-        ViewNode tree  ──sizeThatFits/place──▶  DisplayList
-                ↑
+        ViewNode tree  ──sizeThatFits/place──▶  DisplayList (window)
+                ↑                               + one per render node
         View tree (structs, @ViewBuilder)
 ```
 
-One ThorVG canvas for the whole window (not one node per view): the view tree
-lays out to absolute rects, then emits a flat display list that the renderer
-replays as `Tvg_Paint`s. Rebuild happens on invalidation, not per frame.
+The window canvas is the root node and the fallback: a view draws into it
+unless it — or a view above it — is a node of its own, which a user view
+becomes once a change has originated at it (a `@State` read, an
+`@Observable` write). The view tree lays out to absolute rects, then emits
+a flat display list per node that the renderer replays as `Tvg_Paint`s; a
+node's list is compared in its own coordinates, so it is repainted only
+when its content changed, not when it moved, and what a view draws after a
+nested node and over it goes into an image ordered after that node.
+Rebuild happens on invalidation, not per frame, and the window canvas is
+repainted only when *its* list changed. See
+[rendernode-per-view.md](rendernode-per-view.md).
 
 # TODO
 
@@ -101,6 +117,13 @@ replays as `Tvg_Paint`s. Rebuild happens on invalidation, not per frame.
       an overlay slot of the host's root; `Button` draws as a menu row (§25)
 - [x] `.onHover`, hover-lit rows, `Menu` as a submenu row (nested, flips
       at the edge) and as a dropdown button (§26)
+- [x] `.drawingGroup()` — a render node per view: its own image, repainted
+      only when its content changes; `ThorCanvas` / `ThorCanvasRender` —
+      a node the author fills with persistent ThorVG paints (§28,
+      rendernode-per-view.md)
+- [x] Automatic nodes — a user view a change originates at gets an image
+      of its own through one shared painter canvas; one knob turn is one
+      small ThorVG pass, not the window (§28b)
 
 ## Phase 7 — state
 - [x] `@State` with identity-keyed storage across rebuilds
@@ -216,6 +239,16 @@ why, and each shader slot built with its cost),
   slot of its own, composited over the effect's output rather than through
   it. The canvas is the view's full size, so keep effects on what is on
   screen rather than on a long scroll content.
+- A `.drawingGroup()` composites as a rectangle the same way (clip inside
+  it; a rotation outside it is cut at the image's edge). What the
+  enclosing view paints after it and over it goes into an image of its own
+  ordered after it, as for automatic nodes. A group inside a `.shader` layer, a
+  `.hidden()` view or a drag snapshot draws inline instead. A group larger
+  than the window shows its visible part through a window-sized image and
+  repaints on scroll; a `ThorCanvas` larger than the window is not shown at
+  all (the composite drops a viewport bigger than the swapchain). Every
+  `@View` does *not* get a node automatically: a fresh ThorVG canvas costs
+  ~60ms, which is why nodes are opt-in and their canvases pooled.
 - `NavigationStack` takes the root title as an argument and a pushed screen's
   title from its `NavigationLink` — there is no preference system, so a child
   cannot hand `.navigationTitle` up to an ancestor.

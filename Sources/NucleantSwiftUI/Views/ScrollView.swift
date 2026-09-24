@@ -13,9 +13,10 @@ public struct ScrollView<Content: View>: View {
 
     @State private var offset = Point.zero
 
-    public init(_ axes: Axis.Set = .vertical, @ViewBuilder content: () -> Content) {
+    public init(_ axes: Axis.Set = .vertical, _viewID: ViewID = #viewID, @ViewBuilder content: () -> Content) {
         self.axes = axes
         self.content = content()
+        self._viewID = _viewID
     }
 
     public var body: Never { bodyUnavailable() }

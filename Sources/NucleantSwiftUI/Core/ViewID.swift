@@ -13,29 +13,34 @@
 //  deciding whether the tree it built last time can be kept.
 //
 
-/// Where a view was constructed: file, line and column.
+/// Where a view was constructed: file, line and column, hashed at compile
+/// time by `#viewID`. Nothing at runtime needs the location back — only
+/// that two views from the same place get the same value and two from
+/// different places don't — so this is the hash alone: one `Int` to copy,
+/// compare and hash, no string. The value is fixed by the source, not by a
+/// per-process seed, so a view's keys are the same from one run to the next.
 public struct ViewID: Hashable, Sendable {
-    public let fileID: String
-    public let line: Int
-    public let column: Int
+    public let hash: Int
 
-    public init(fileID: String, line: Int, column: Int) {
-        self.fileID = fileID
-        self.line = line
-        self.column = column
+    public init(hash: Int) {
+        self.hash = hash
     }
 
     /// No call site: a view that was neither stamped by a builder nor made
     /// through a `@View` init. Identity then rests on position and type.
-    public static let unknown = ViewID(fileID: "", line: 0, column: 0)
+    public static let unknown = ViewID(hash: 0)
 }
 
-/// The identity of the place this is written.
+/// The identity of the place this is written, as a literal.
 ///
 /// Meant as a default argument — `_viewID: ViewID = #viewID` — where it is
-/// expanded at the *call* site (SE-0422). A plain initializer with `#line`
-/// defaults can't do that: nested magic literals name the line they are
-/// written on, which for a default argument is the declaration.
+/// expanded at the *call* site (SE-0422), the implicit call a `@ViewBuilder`
+/// body makes for each view expression included. A plain initializer with
+/// `#line` defaults can't do that: nested magic literals name the line they
+/// are written on, which for a default argument is the declaration. The
+/// macro sees the call site's file, line and column and expands to
+/// `ViewID(hash:)` of them — the hash is the compiler's work, not the
+/// program's.
 @freestanding(expression)
 public macro viewID() -> ViewID = #externalMacro(module: "NucleantSwiftUIMacros", type: "ViewIDMacro")
 
@@ -65,8 +70,17 @@ public macro viewID() -> ViewID = #externalMacro(module: "NucleantSwiftUIMacros"
 ///
 /// When the struct declares no initializer, one is generated with a trailing
 /// `_viewID: ViewID = #viewID` parameter, for views constructed outside a
-/// builder. A stored closure gets a warning: two values holding closures are
-/// never equivalent, so such a view is rebuilt whenever its parent is.
+/// builder.
+///
+/// A stored closure is not compared at all — there is nothing to compare two
+/// closures by — so a view whose only difference is a closure is *equivalent*
+/// and is kept. The closure the view then runs is the one from the build that
+/// created it: capture a `Binding`, a `@State` holder or a model object in it,
+/// never a plain value the parent may change (`{ delete(userID) }` with
+/// `userID` a `let` of the parent keeps the old id; `{ delete(model.userID) }`
+/// reads the live one). A view with nothing but closures — a canvas view — is
+/// equivalent to every other value of itself, which is the point: its work is
+/// driven by what its closures read, not by who re-ran the parent.
 ///
 /// The builder uses the result like SwiftUI does: when a parent's body re-runs
 /// and produces a child that is equivalent to the one already standing at the

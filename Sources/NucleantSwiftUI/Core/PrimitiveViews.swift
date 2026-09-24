@@ -142,8 +142,24 @@ extension AnyView: BuiltinView {
 struct _HostRoot: View {
     let content: AnyView
     let overlay: AnyView?
+    /// Where slot `[1]` paints — read by the host after the pass.
+    let capture: OverlayCapture
 
     var body: Never { bodyUnavailable() }
+}
+
+/// What the overlay slot drew this pass, kept apart from the window's list:
+/// the host composites it as the topmost render node, so a menu opened over
+/// a `.drawingGroup()` or a `Shader` is over it, not under it. `order` is
+/// the paint position reserved for that node as the slot began — so a node
+/// *inside* the overlay (a shader in a popover) composites over it.
+@MainActor
+final class OverlayCapture {
+    var list = DisplayList()
+    var order: Int?
+    /// The nodes placed inside the overlay, for the host to file its
+    /// images around — see `RenderBoundaries.Frame`.
+    var frame: RenderBoundaries.Frame?
 }
 
 /// Slot `[1]`: the open popovers, and over them the context menu if one is
@@ -166,21 +182,39 @@ extension _HostRoot: BuiltinView {
     func makeNode(_ context: inout BuildContext) -> ViewNode {
         let content = context.child(0) { ctx in buildNode(self.content, &ctx) }
         let overlay = context.child(1) { ctx in buildNode(self.overlay, &ctx) }
-        return ViewNode(content: HostRootContent(), children: [content, overlay])
+        return ViewNode(content: HostRootContent(capture: capture), children: [content, overlay])
     }
 }
 
 /// Both slots get the whole window. By `children`, not `layoutChildren`:
 /// an empty overlay is a transparent group that flattening would drop,
-/// shifting the slots.
+/// shifting the slots. Slot `[0]` paints into the window's list; slot `[1]`
+/// into the capture, for the host to composite last.
 struct HostRootContent: NodeContent {
+    let capture: OverlayCapture
+
     func sizeThatFits(_ proposal: ProposedSize, node: ViewNode) -> Size {
         proposal.replacingUnspecifiedDimensions()
     }
 
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
-        for child in node.children {
-            child.place(in: rect, proposal: proposal, context: context, into: &list)
+        guard node.children.count == 2 else {
+            for child in node.children {
+                child.place(in: rect, proposal: proposal, context: context, into: &list)
+            }
+            return
+        }
+        node.children[0].place(in: rect, proposal: proposal, context: context, into: &list)
+        capture.list = DisplayList()
+        capture.frame = nil
+        let host = ShaderHost.current
+        capture.order = host?.renderNodes.nextPaintOrder()
+        if let order = capture.order {
+            host?.boundaries.beginFrame(primaryOrder: order)
+        }
+        node.children[1].place(in: rect, proposal: proposal, context: context, into: &capture.list)
+        if capture.order != nil {
+            capture.frame = host?.boundaries.endFrame()
         }
     }
 }

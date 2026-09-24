@@ -24,6 +24,12 @@
 ///
 /// The same shader in Python syntax goes through `ShaderFunction(pyshader:)`
 /// and PyShader, which emits the SPIR-V directly — no GLSL, no shaderc.
+///
+/// A function may also place its own geometry: `ShaderFunction(varyings:vertex:fragment:)`
+/// — or a PyShader module defining `vertex` as well as `fragment` — is a
+/// vertex + fragment pair, and `isGraphics` says so. It is the same type
+/// either way, so it goes into the same `.shader(_:)` and the same
+/// `ShaderArgument`s; what changes is only which pixels the body runs over.
 public struct ShaderFunction: Hashable, Sendable {
 
     /// What the source is written in.
@@ -45,13 +51,76 @@ public struct ShaderFunction: Hashable, Sendable {
     public let functions: String
 
     /// The per-pixel body, inlined into `main` — or, for PyShader, the whole
-    /// Python module.
+    /// Python module, both stages included.
     public let body: String
+
+    /// GLSL only: a stage that places the geometry `body` then shades, and
+    /// the varyings between them. GLSL is two shaders, so a pair needs two
+    /// sources.
+    ///
+    /// `nil` for every PyShader function, whatever it does: one module holds
+    /// both stages there, so `body` is the whole of it and there is nothing
+    /// to carry beside it.
+    public let glslVertexStage: VertexStage?
+
+    /// The GLSL vertex half of a pair.
+    public struct VertexStage: Hashable, Sendable {
+        /// `type name;` pairs the vertex stage writes and the fragment stage
+        /// reads, declared once for both (`flat` is added for integer types).
+        public let varyings: String
+        /// The body, placing its geometry from `gl_VertexIndex` /
+        /// `gl_InstanceIndex` and writing `gl_Position` in y-up clip space.
+        public let body: String
+    }
 
     public init(functions: String = "", _ body: String) {
         self.language = .glsl
         self.functions = functions
         self.body = body
+        self.glslVertexStage = nil
+    }
+
+    /// A vertex + fragment pair in GLSL.
+    ///
+    /// Where a per-pixel body runs once per pixel of the whole rect, this
+    /// runs `vertex` once per vertex of every instance drawn and `fragment`
+    /// once per pixel the resulting triangles cover — which is what makes
+    /// "one quad per touch, from an array of touches" a single draw call.
+    /// There are no vertex buffers: the vertex stage places its geometry from
+    /// `gl_VertexIndex`, `gl_InstanceIndex` and the `ShaderArgument`s.
+    ///
+    /// `varyings` is what connects the two — `type name;` pairs, declared
+    /// once and used as plain variables in both stages (`flat` is added for
+    /// integer types):
+    ///
+    /// ```swift
+    /// let glow = ShaderFunction(
+    ///     varyings: "vec2 local; float seed;",
+    ///     vertex: """
+    ///         int t = gl_InstanceIndex * 3;
+    ///         vec2 corner = QUAD[gl_VertexIndex];
+    ///         vec2 centre = vec2(touches(t), touches(t + 1));
+    ///         gl_Position = vec4((centre + corner * 0.25) * 2.0 - 1.0, 0.0, 1.0);
+    ///         local = corner * 0.5 + 0.5;
+    ///         seed = touches(t + 2);
+    ///     """,
+    ///     fragment: """
+    ///         float d = distance(local, vec2(0.5));
+    ///         fragColor = vec4(vec3(fract(seed + time)), smoothstep(0.5, 0.0, d));
+    ///     """)
+    /// ```
+    ///
+    /// `time`, `resolution` and `mouse` are in scope in both stages, as are
+    /// the arguments; `uv` and `fragCoord` in the fragment stage, and
+    /// `layer(uv)` there too when the function is used as a `.shader(_:)`
+    /// effect. Shader space is y-up as everywhere else: `gl_Position` is
+    /// written as in OpenGL and flipped into Vulkan's clip space by the
+    /// wrapper.
+    public init(functions: String = "", varyings: String = "", vertex: String, fragment: String) {
+        self.language = .glsl
+        self.functions = functions
+        self.body = fragment
+        self.glslVertexStage = VertexStage(varyings: varyings, body: vertex)
     }
 
     /// A shader written in Python syntax, compiled by PyShader.
@@ -72,10 +141,30 @@ public struct ShaderFunction: Hashable, Sendable {
     ///         return float4(float3(0.5 + 0.5 * sin(3.14159 * v)), 1.0)
     /// """)
     /// ```
+    /// A PyShader module defining both `vertex` and `fragment` is a vertex +
+    /// fragment pair instead: `vertex` returns a `class` whose first field is
+    /// the `float4` position and whose other fields are the varyings, taken by
+    /// `fragment` by name.
+    ///
+    /// ```swift
+    /// let glow = ShaderFunction(pyshader: """
+    ///     class V:
+    ///         position: float4
+    ///         local: float2
+    ///         seed: float
+    ///
+    ///     def vertex(vertex_index: int, instance_index: int, touches: Float4Array) -> V:
+    ///         ...
+    ///
+    ///     def fragment(local: float2, seed: float, time: float) -> float4:
+    ///         ...
+    /// """)
+    /// ```
     public init(pyshader source: String) {
         self.language = .pyshader
         self.functions = ""
         self.body = source
+        self.glslVertexStage = nil
     }
 
     /// Wraps an unmodified ShaderToy shader.
@@ -105,13 +194,38 @@ public struct ShaderFunction: Hashable, Sendable {
         self.language = .glsl
         self.functions = source
         self.body = "mainImage(fragColor, fragCoord);"
+        self.glslVertexStage = nil
+    }
+
+    /// Whether this function places its own geometry — a `glslVertexStage`,
+    /// or a `def vertex` beside a `def fragment` in one PyShader module. The
+    /// host draws it with a graphics pipeline rather than a compute dispatch,
+    /// and it is the same `ShaderFunction` either way, so `.shader(_:)` takes
+    /// it as it takes any other.
+    public var isGraphics: Bool {
+        if language == .glsl { return glslVertexStage != nil }
+        return Self.definesStage("vertex", in: body) && Self.definesStage("fragment", in: body)
+    }
+
+    /// `def <name>(` at the start of a line of PyShader source.
+    static func definesStage(_ name: String, in source: String) -> Bool {
+        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = line.drop(while: { $0 == " " || $0 == "\t" })
+            guard text.hasPrefix("def ") else { continue }
+            let rest = text.dropFirst(4).drop(while: { $0 == " " })
+            if rest.hasPrefix(name), rest.dropFirst(name.count).drop(while: { $0 == " " }).hasPrefix("(") {
+                return true
+            }
+        }
+        return false
     }
 
     /// Identity for the compiled-pipeline cache: both halves, since either
     /// changing means a recompile — and the language, since the same text
     /// means different things in each.
     var source: String {
-        let text = functions.isEmpty ? body : functions + "\n" + body
+        let stage = glslVertexStage.map { [$0.varyings, $0.body] } ?? []
+        let text = ([functions] + stage + [body]).filter { !$0.isEmpty }.joined(separator: "\n")
         return language == .pyshader ? "#pyshader\n" + text : text
     }
 
@@ -362,14 +476,16 @@ public struct Shader: View {
     let function: ShaderFunction
     let arguments: [ShaderArgument]
 
-    public init(_ function: ShaderFunction, arguments: [ShaderArgument] = []) {
+    public init(_ function: ShaderFunction, arguments: [ShaderArgument] = [], _viewID: ViewID = #viewID) {
         self.function = function
         self.arguments = arguments
+        self._viewID = _viewID
     }
 
-    public init(source: String, arguments: [ShaderArgument] = []) {
+    public init(source: String, arguments: [ShaderArgument] = [], _viewID: ViewID = #viewID) {
         self.function = ShaderFunction(source)
         self.arguments = arguments
+        self._viewID = _viewID
     }
 
     public var body: Never { bodyUnavailable() }
@@ -400,14 +516,15 @@ struct ShaderContent: NodeContent {
     }
 
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
-        guard rect.width > 0, rect.height > 0 else { return }
-        ShaderHost.current?.use(
+        guard rect.width > 0, rect.height > 0, let host = ShaderHost.current else { return }
+        host.use(
             path: path,
             function: function,
             arguments: arguments,
             rect: rect,
-            clip: context.clip
+            clip: context.compositeClip
         )
+        host.boundaries.noteNested(at: list.commands.count, rect: context.compositeClip.map { rect.intersection($0) } ?? rect)
     }
 }
 

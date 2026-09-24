@@ -65,6 +65,9 @@ final class DragSession {
             var context = source.value.context
             context.clip = nil
             context.clipCornerRadius = 0
+            // The snapshot wants the pixels of a drawing group inside, not a
+            // node that would keep compositing at the view's old place.
+            context.flattensRenderNodes = true
             var list = DisplayList()
             source.node.place(in: source.frame, proposal: source.value.proposal, context: context, into: &list)
             preview = .snapshot(list.commands)
@@ -112,6 +115,7 @@ final class DragSession {
     func draw(into list: inout DisplayList, colorScheme: ColorScheme) {
         var faded = DrawContext(colorScheme: colorScheme)
         faded.opacity = Self.previewOpacity
+        faded.flattensRenderNodes = true
         switch preview {
         case .snapshot(let commands):
             let dx = location.x - origin.x
