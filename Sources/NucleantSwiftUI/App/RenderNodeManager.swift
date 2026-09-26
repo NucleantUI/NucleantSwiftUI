@@ -122,10 +122,10 @@ final class RenderNodeManager {
             let maxY = (visible.maxY * scale).rounded(.up)
             container.compositeScissor = SIMD4(minX, minY, max(0, maxX - minX), max(0, maxY - minY))
             if LayoutTrace.isEnabled {
-                fputs(String(
+                nucleantLogError(String(
                     format: "[layout] node    rect x=%7.2f y=%7.2f w=%7.2f h=%7.2f  image %dx%d\n",
                     rect.minX, rect.minY, rect.width, rect.height, width, height
-                ), stderr)
+                ))
             }
         }
 
@@ -387,8 +387,8 @@ final class RenderNodeManager {
         }
         let started = PerfTrace.isVerbose ? DispatchTime.now().uptimeNanoseconds : 0
         guard let thor = engine.makeThorWidgetNode(width: width, height: height) else {
-            fflush(stdout)
-            fputs("NucleantSwiftUI: canvas node build (\(width)x\(height)) failed\n", stderr)
+            nucleantFlushStandardOutput()
+            nucleantLogError("NucleantSwiftUI: canvas node build (\(width)x\(height)) failed\n")
             return nil
         }
         let container = NucleantRenderNode(
@@ -519,8 +519,8 @@ final class RenderNodeManager {
         do {
             node = try engine.makeImageNode(width: width, height: height)
         } catch {
-            fflush(stdout)
-            fputs("NucleantSwiftUI: image node (\(width)x\(height)) failed: \(error)\n", stderr)
+            nucleantFlushStandardOutput()
+            nucleantLogError("NucleantSwiftUI: image node (\(width)x\(height)) failed: \(error)\n")
             return nil
         }
         let container = NucleantRenderNode(id: Int.random(in: Int.min...Int.max), context: .image(node))

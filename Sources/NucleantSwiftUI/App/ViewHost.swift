@@ -379,7 +379,7 @@ public final class ViewHost {
         if LayoutTrace.isEnabled {
             LayoutTrace.dump(list)
             if !overlay.list.isEmpty {
-                fputs("[layout] overlay:\n", stderr)
+                nucleantLogError("[layout] overlay:\n")
                 LayoutTrace.dump(overlay.list)
             }
         }

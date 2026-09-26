@@ -326,11 +326,11 @@ final class RenderBoundaries {
             origin: SIMD2(px, py)
         )
         if LayoutTrace.isEnabled {
-            fputs(String(
+            nucleantLogError(String(
                 format: "[layout] image   rect x=%7.2f y=%7.2f w=%7.2f h=%7.2f  image %dx%d  ",
                 imageRect.minX, imageRect.minY, imageRect.width, imageRect.height,
                 entry.width, entry.height
-            ) + "\(key.path)/\(key.id)\n", stderr)
+            ) + "\(key.path)/\(key.id)\n")
         }
         return visible.width > 0 && visible.height > 0 ? visible : nil
     }

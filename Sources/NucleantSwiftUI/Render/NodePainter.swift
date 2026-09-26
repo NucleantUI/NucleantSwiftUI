@@ -318,8 +318,8 @@ final class NodePainter {
         guard let canvas = nodes.acquire(width: width, height: height) else {
             if !warned {
                 warned = true
-                fflush(stdout)
-                fputs("NucleantSwiftUI: painter canvas (\(width)x\(height)) failed — per-view nodes are off\n", stderr)
+                nucleantFlushStandardOutput()
+                nucleantLogError("NucleantSwiftUI: painter canvas (\(width)x\(height)) failed — per-view nodes are off\n")
             }
             return nil
         }
