@@ -30,6 +30,12 @@ import NucleantApplication
 #if os(Android)
 import Platform_Android
 #endif
+#if os(Linux)
+import Platform_Linux
+// VkExtent2D — Linux has no CAMetalLayer whose drawable size the engine can
+// read, so the swapchain size is supplied as a callback instead.
+import CVulkan
+#endif
 
 public final class HostingWindow: NucleantWindow, @unchecked Sendable {
 
@@ -46,7 +52,7 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     /// through `assumeIsolated`.
     let host: ViewHost
 
-    #if os(macOS) || os(iOS) || os(Android)
+    #if os(macOS) || os(iOS) || os(Android) || os(Linux)
     /// Strongly held: `PlatformWindow` keeps only a weak `win_delegate` back
     /// here, so the window's lifetime is this object's to own.
     var platformWindow: PlatformWindow<HostingWindow>?
@@ -93,6 +99,8 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
             try presentIOS()
             #elseif os(Android)
             presentAndroid()
+            #elseif os(Linux)
+            try presentLinux()
             #else
             throw HostingWindowError.unsupportedPlatform
             #endif
@@ -224,6 +232,75 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     }
     #endif
 
+    #if os(Linux)
+    @MainActor
+    private func presentLinux() throws {
+        // 1. A Wayland or X11 toplevel, whichever `LinuxSession.detect()` says
+        //    the session is. Its frame loop starts in init and no-ops until
+        //    `win_delegate` and the engine below are in place, exactly as the
+        //    display link does on macOS.
+        let platformWindow = try PlatformWindow<HostingWindow>(
+            width: win_rect.z,
+            height: win_rect.w,
+            title: title
+        )
+
+        // 2. The engine renders through VK_KHR_wayland_surface or
+        //    VK_KHR_xcb_surface, from whichever raw handles the active backend
+        //    hands over — there is no layer object to pass, and no drawable to
+        //    ask for a size, so the swapchain reads `bufferWidth/Height`
+        //    through this callback whenever it recreates itself. Weak, because
+        //    the engine is owned by this window and outlives nothing.
+        let getExtent: () -> VkExtent2D = { [weak platformWindow] in
+            VkExtent2D(
+                width: platformWindow?.bufferWidth ?? 0,
+                height: platformWindow?.bufferHeight ?? 0
+            )
+        }
+        let engine: NucleantRenderEngine
+        switch platformWindow.vulkanSurfaceKind {
+        case .wayland(let display, let surface):
+            engine = try NucleantRenderEngine(
+                waylandDisplay: display,
+                waylandSurface: surface,
+                getExtent: getExtent
+            )
+        case .xcb(let connection, let window):
+            engine = try NucleantRenderEngine(
+                xcbConnection: connection,
+                xcbWindow: window,
+                getExtent: getExtent
+            )
+        }
+        self.renderEngine = engine
+        self.platformWindow = platformWindow
+        platformWindow.win_delegate = self
+
+        displayScale = platformWindow.scale
+
+        // 3. One window-filling ThorVG node for the whole tree, in pixels.
+        attachCanvas(engine: engine, width: win_rect.z, height: win_rect.w)
+
+        // 4. Neither Wayland nor X11 has an appearance setting to follow — the
+        //    desktop-specific ones (GNOME's `color-scheme`, KDE's) would each
+        //    need their own settings daemon — so this is the app's override if
+        //    it set one and light otherwise. Seeded once; nothing to observe.
+        applyColorScheme(Self.systemColorScheme())
+
+        // 5. Show it. On X11 this is the real `xcb_map_window`; on Wayland a
+        //    window only becomes visible on its first attached buffer, so it is
+        //    the frame loop below that actually puts it on screen.
+        platformWindow.show()
+
+        // 6. Seed the size. Both backends report a resize only when one
+        //    happens — a WM that honours the requested size never sends
+        //    one — so without this the tree never learns how big it is.
+        //    Points, which is what the backends report and what `on_size`
+        //    scales itself; `win_rect` is already in pixels.
+        on_size(w: platformWindow.width, h: platformWindow.height)
+    }
+    #endif
+
     #if os(Android)
     /// Attach to the Activity's surface.
     ///
@@ -350,11 +427,13 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     /// other main-actor block, and the display-link callback is cheap
     /// enough that the loop always drains the queue before the next tick.
     public func onFrame(_ dt: Double) {
-        #if os(Android)
-        // Frames arrive on the UI thread — the Activity's Choreographer posts
-        // them — which is the process main thread, so the isolation holds.
-        // No hop: `DispatchQueue.main.async` would queue onto a main queue
-        // that nothing on Android ever drains.
+        #if os(Android) || os(Linux)
+        // Both platforms tick from a loop of their own on the process main
+        // thread — the Activity's Choreographer on Android, `X11Display.run()`
+        // / `WaylandDisplay.run()` here — so the isolation holds, and there is
+        // no run loop underneath either of them servicing the main *dispatch*
+        // queue. A hop through `DispatchQueue.main.async` would queue frames
+        // that nothing ever drains, which is a window that stays black.
         MainActor.assumeIsolated {
             renderFrame(dt)
         }
@@ -392,6 +471,11 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         MainActor.assumeIsolated {
             #if os(macOS) || os(iOS)
             displayScale = Double(platformWindow?.metalLayer.contentsScale ?? 1)
+            #elseif os(Linux)
+            // The same re-read, from the backend's own scale: a window dragged
+            // to a display with a different scale factor gets told through a
+            // resize and nothing else.
+            displayScale = platformWindow?.scale ?? 1
             #endif
             let pixelWidth = Int(w * displayScale)
             let pixelHeight = Int(h * displayScale)
@@ -513,4 +597,12 @@ extension HostingWindow: WindowBaseDelegate {}
 
 #if os(iOS)
 extension HostingWindow: WindowTouchDelegate {}
+#endif
+
+#if os(Linux)
+// Linux is the one platform where pointer, keyboard and touch are all live at
+// once — a `wl_seat` can advertise all three — so `WaylandWindowDelegate` is
+// the union of the two Apple protocols above. Its default implementations
+// (Platform_Linux) forward to the same `on_*` methods.
+extension HostingWindow: WaylandWindowDelegate {}
 #endif

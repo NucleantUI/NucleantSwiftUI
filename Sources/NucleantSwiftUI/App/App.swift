@@ -13,6 +13,9 @@ import AppKit
 import UIKit
 import Platform_iOS
 #endif
+#if os(Linux)
+import Glibc
+#endif
 
 /// A part of an app's user interface with a life cycle — currently, a window.
 @MainActor
@@ -208,6 +211,28 @@ public final class AppRuntime<A: NucleantApp>: NucleantApplication {
             nil,
             NSStringFromClass(_AppLaunchDelegate.self)
         )
+        #elseif os(Linux)
+        // Linux is macOS's shape, not Android's: the delegate connects to the
+        // display server, fires `onStart()` — which is where the windows get
+        // presented — and hands this thread to the Wayland/X11 event loop,
+        // returning only when the last window closes. Without this branch
+        // `main()` returned here and the process exited before a window was
+        // ever built, which is what "nothing happens on Linux" was.
+        //
+        // Straight to the delegate for the same reason as Android below: this
+        // declaration shadows NucleantApplication's protocol-extension `run()`,
+        // so calling it by name would resolve back here.
+        //
+        // The one thing neither Apple platform has to say: there may be no
+        // display server to talk to — a bare TTY, an SSH shell with nothing
+        // forwarded, a container without the socket bind-mounted. Report that
+        // as itself rather than as a window that never appears.
+        do {
+            try appDelegate?.run()
+        } catch {
+            nucleantLogError("NucleantSwiftUI: no display server to open a window on: \(error)\n")
+            exit(1)
+        }
         #elseif os(Android)
         // Unlike every other platform this returns. The Activity owns the UI
         // thread and the main looper, so there is no event loop here to hand

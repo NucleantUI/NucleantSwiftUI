@@ -36,6 +36,19 @@ let localDev: Bool = {
 let isAndroid = ProcessInfo.processInfo.environment["SWIFT_ANDROID_HOME"] != nil
     || ProcessInfo.processInfo.environment["ANDROID_BUILD"] != nil
 
+/// Linux is the mirror image: NucleantApplication declares `Platform_Linux`
+/// only when it is being built *on* Linux, because that provider's CWayland
+/// target compiles wayland-scanner output against <wayland-client.h>, which no
+/// Apple SDK has — so naming the product unconditionally would break every
+/// Apple resolve, the same way naming Platform_Android does. Unlike Android
+/// there is no cross-compile into Linux, so a host check is the target check.
+/// `&& !isAndroid` because the Android host *is* Linux.
+#if os(Linux)
+let isLinux = !isAndroid
+#else
+let isLinux = false
+#endif
+
 /// The platform provider NucleantSwiftUI links directly, for the
 /// `PlatformWindow` that `HostingWindow` owns. Only one is ever in scope.
 func platformProviders() -> [Target.Dependency] {
@@ -43,6 +56,9 @@ func platformProviders() -> [Target.Dependency] {
         .product(name: "Platform_MacOS", package: "NucleantApplication", condition: .when(platforms: [.macOS])),
         .product(name: "Platform_iOS", package: "NucleantApplication", condition: .when(platforms: [.iOS])),
     ]
+    if isLinux {
+        deps.append(.product(name: "Platform_Linux", package: "NucleantApplication", condition: .when(platforms: [.linux])))
+    }
     if isAndroid {
         deps.append(.product(name: "Platform_Android", package: "NucleantApplication", condition: .when(platforms: [.android])))
         // The Java edge (jextract's `org.nucleantui.NucleantBridge`). Linked in

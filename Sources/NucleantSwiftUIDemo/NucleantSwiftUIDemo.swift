@@ -597,39 +597,46 @@ struct ContentView {
     @State private var tracks = defaultTracks
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 14) {
             header
 
             Counter()
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            HStack(spacing: 12) {
-                Button(showDetails ? "Hide mixer" : "Show mixer") {
-                    showDetails.toggle()
+            // Two rows of three. This is the one demo source for every
+            // platform, and a phone in portrait is ~410pt wide — six
+            // destinations and a version label in a single row run off the
+            // edge there. Wider windows get a little more air; they fit
+            // either way, and narrow ones only fit this way.
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Button(showDetails ? "Hide mixer" : "Show mixer") {
+                        showDetails.toggle()
+                    }
+                    .tint(Palette.accent)
+
+                    Button("Reset") { tracks = defaultTracks }
+                        .tint(Palette.muted)
+
+                    NavigationLink("Shaders") { ShaderGalleryScreen() }
                 }
-                .tint(Palette.accent)
 
-                Button("Reset") { tracks = defaultTracks }
-                    .tint(Palette.muted)
+                HStack(spacing: 8) {
+                    NavigationLink("Effects") { EffectsScreen() }
 
-                NavigationLink("Shaders") { ShaderGalleryScreen() }
+                    NavigationLink("Drag & drop") { DragDropScreen() }
 
-                NavigationLink("Effects") { EffectsScreen() }
-
-                NavigationLink("Drag & drop") { DragDropScreen() }
-
-                NavigationLink("About") { AboutScreen() }
-
-                Spacer()
-
-                Text("NucleantSwiftUI \(NucleantSwiftUI.version)")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
+                    NavigationLink("About") { AboutScreen() }
+                }
             }
 
             Divider()
 
             if showDetails {
+                // Scrolled, not stacked: six rows fit a portrait phone and a
+                // desktop window, but not a phone in landscape — and a drag
+                // scrolls on the platforms with no wheel, which is what
+                // `host.scrollsOnDrag` is for.
                 ScrollView(.vertical) {
                     VStack(spacing: 8) {
                         ForEach(tracks.indices, id: \.self) { index in
@@ -641,6 +648,7 @@ struct ContentView {
                         }
                     }
                 }
+                .frame(maxHeight: .infinity)
             } else {
                 VStack {
                     Spacer()
@@ -650,42 +658,50 @@ struct ContentView {
                     Spacer()
                 }
             }
+
+            Text("NucleantSwiftUI \(NucleantSwiftUI.version)")
+                .font(.footnote)
+                .foregroundColor(.secondary)
         }
-        .padding(24)
+        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Palette.background)
     }
 
     var header: some View {
-        HStack(alignment: .center, spacing: 14) {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.linearGradient(
-                    colors: [Palette.accent, Color(hex: 0xB57BFF)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ))
-                .frame(width: 36, height: 36)
+        // Title on its own line, controls beneath. Side by side they need
+        // more width than a portrait phone has, and the subtitle is the first
+        // thing to get squeezed into three lines.
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.linearGradient(
+                        colors: [Palette.accent, Color(hex: 0xB57BFF)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                    .frame(width: 32, height: 32)
 
-            VStack(alignment: .leading, spacing: 2) {
                 Text("Nucleant Mixer")
-                    .font(.system(size: 22, weight: .bold))
-                Text("SwiftUI-shaped views, ThorVG on Vulkan")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 20, weight: .bold))
+
+                Spacer()
             }
 
-            Spacer()
+            HStack(spacing: 8) {
+                // A dropdown: the same items a context menu takes, under a button.
+                Menu("Tracks") {
+                    Button("Mute all") { for i in tracks.indices { tracks[i].level = 0 } }
+                    Button("Full all") { for i in tracks.indices { tracks[i].level = 1 } }
+                    Divider()
+                    Button("Reset") { tracks = defaultTracks }
+                }
+                .tint(Palette.muted)
 
-            // A dropdown: the same items a context menu takes, under a button.
-            Menu("Tracks") {
-                Button("Mute all") { for i in tracks.indices { tracks[i].level = 0 } }
-                Button("Full all") { for i in tracks.indices { tracks[i].level = 1 } }
-                Divider()
-                Button("Reset") { tracks = defaultTracks }
+                Spacer()
+
+                AppearancePicker(appearance: $appearance)
             }
-            .tint(Palette.muted)
-
-            AppearancePicker(appearance: $appearance)
         }
     }
 }
@@ -708,6 +724,11 @@ struct RootView {
     }
 }
 
+// `@main` even though this is a library target: the attribute is legal there
+// (SwiftPM infers an executable from a file *named* main.swift, not from this),
+// so one spelling serves every platform. On Android it is simply unused — the
+// Activity enters through nucleantRunMain, which builds the runtime and holds
+// it, because `main()` here would return and release it before a frame drew.
 @main
 struct DemoApp: NucleantApp {
     var body: some Scene {
