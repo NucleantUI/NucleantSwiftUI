@@ -117,6 +117,11 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         return match == .darkAqua ? .dark : .light
         #elseif os(iOS)
         return UITraitCollection.current.userInterfaceStyle == .dark ? .dark : .light
+        #elseif os(Linux)
+        // The desktop's own setting, through the XDG portal — see
+        // DesktopAppearance. A desktop with no preference gets light, the same
+        // answer as a platform with nothing to ask.
+        return DesktopAppearance.colorScheme() == .dark ? .dark : .light
         #else
         return .light
         #endif
@@ -281,10 +286,12 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         // 3. One window-filling ThorVG node for the whole tree, in pixels.
         attachCanvas(engine: engine, width: win_rect.z, height: win_rect.w)
 
-        // 4. Neither Wayland nor X11 has an appearance setting to follow — the
-        //    desktop-specific ones (GNOME's `color-scheme`, KDE's) would each
-        //    need their own settings daemon — so this is the app's override if
-        //    it set one and light otherwise. Seeded once; nothing to observe.
+        // 4. Light or dark, from the desktop. Neither Wayland nor X11 carries
+        //    this — it is a desktop setting, not a display-server one — so it
+        //    comes from the XDG portal, which is where every other toolkit
+        //    reads it. Seeded once: the portal will also *signal* a change,
+        //    which macOS follows through `effectiveAppearance` but this does
+        //    not yet.
         applyColorScheme(Self.systemColorScheme())
 
         // 5. Show it. On X11 this is the real `xcb_map_window`; on Wayland a
