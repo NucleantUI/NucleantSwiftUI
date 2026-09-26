@@ -1,5 +1,5 @@
 {
-  "originHash" : "8a691a77fa29f10fd481e4c9a2e0c87a19839ba66849bdb26d1a190c914a2b28",
+  "originHash" : "a4d2f0cdac557804bbe6aaa845cef2c05b49c7e1fe3b6cc01a75d394081ce1f3",
   "pins" : [
     {
       "identity" : "pyswiftast",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-syntax.git",
       "state" : {
-        "revision" : "4799286537280063c85a32f09884cfbca301b1a1",
-        "version" : "602.0.0"
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
       }
     }
   ],

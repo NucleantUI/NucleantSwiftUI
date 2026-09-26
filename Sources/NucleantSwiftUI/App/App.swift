@@ -152,7 +152,7 @@ public final class AppRuntime<A: NucleantApp>: NucleantApplication {
         // buffered when the process isn't on a terminal — Xcode's console
         // included — so a failure on a device shows up late or never. Line
         // buffering costs nothing in a GUI app.
-        setvbuf(stdout, nil, _IOLBF, 0)
+        nucleantLineBufferStandardOutput()
 
         // ThorVG's engine has to be up before any canvas is created —
         // `tvg_wgcanvas_create` returns null otherwise, which is exactly what a
@@ -165,7 +165,7 @@ public final class AppRuntime<A: NucleantApp>: NucleantApplication {
             do {
                 try window.present()
             } catch {
-                fputs("NucleantSwiftUI: window present failed: \(error)\n", stderr)
+                nucleantLogError("NucleantSwiftUI: window present failed: \(error)\n")
             }
         }
         // Always, even with no `.commands`: the standard menus are what give
@@ -192,13 +192,13 @@ public final class AppRuntime<A: NucleantApp>: NucleantApplication {
         // aborts on the missing bundle identifier inside UIApplicationMain
         // with nothing to say why. Say why.
         guard Bundle.main.bundleIdentifier != nil else {
-            fputs("""
+            nucleantLogError("""
                 NucleantSwiftUI: no app bundle (\(Bundle.main.bundlePath)). \
                 On iOS run an application target — for the demo, the \
                 NucleantSwiftUIDemoApp scheme in XcodeExamples — not the \
                 package's executable product.
 
-                """, stderr)
+                """)
             exit(1)
         }
         _AppLaunchDelegate.onLaunch = { [self] in onStart() }
@@ -208,6 +208,19 @@ public final class AppRuntime<A: NucleantApp>: NucleantApplication {
             nil,
             NSStringFromClass(_AppLaunchDelegate.self)
         )
+        #elseif os(Android)
+        // Unlike every other platform this returns. The Activity owns the UI
+        // thread and the main looper, so there is no event loop here to hand
+        // the calling thread to, and the render loop belongs to
+        // `PlatformWindow` — started when a surface appears, stopped when it
+        // goes away. Keeping the process alive past this point is the
+        // bootstrap's job, not this call's.
+        //
+        // Straight to the delegate rather than NucleantApplication's own
+        // Android `run()`: that one is a protocol *extension* method, which
+        // this declaration shadows, so calling it by name from here would
+        // resolve back to this function. Both do the same one thing.
+        appDelegate?.run()
         #endif
     }
 }

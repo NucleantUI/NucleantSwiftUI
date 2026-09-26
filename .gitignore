@@ -9,3 +9,5 @@ DerivedData/
 *.ips
 Examples/*/.build
 Examples/*/Package.resolved
+.build-android-x86_64
+.build-host

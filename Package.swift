@@ -28,6 +28,32 @@ let localDev: Bool = {
 /// either way — SwiftPM derives a path dependency's identity from the
 /// directory name and a URL dependency's from the repository name, and those
 /// match — so the targets below never need to know which source is in use.
+/// Android is always a cross-compile: `Package.swift` is evaluated by the *host*
+/// toolchain, so `#if os(Android)` here would describe the host and never be
+/// true. NucleantApplication only declares its `Platform_Android` product under
+/// the same env opt-in, so referencing that product unconditionally would break
+/// every non-Android resolve — the two manifests have to agree on the signal.
+let isAndroid = ProcessInfo.processInfo.environment["SWIFT_ANDROID_HOME"] != nil
+    || ProcessInfo.processInfo.environment["ANDROID_BUILD"] != nil
+
+/// The platform provider NucleantSwiftUI links directly, for the
+/// `PlatformWindow` that `HostingWindow` owns. Only one is ever in scope.
+func platformProviders() -> [Target.Dependency] {
+    var deps: [Target.Dependency] = [
+        .product(name: "Platform_MacOS", package: "NucleantApplication", condition: .when(platforms: [.macOS])),
+        .product(name: "Platform_iOS", package: "NucleantApplication", condition: .when(platforms: [.iOS])),
+    ]
+    if isAndroid {
+        deps.append(.product(name: "Platform_Android", package: "NucleantApplication", condition: .when(platforms: [.android])))
+        // The Java edge (jextract's `org.nucleantui.NucleantBridge`). Linked in
+        // here rather than declared by every app, so an Android app's package
+        // names NucleantSwiftUI and nothing else — the same way it does not
+        // name Platform_Android.
+        deps.append(.product(name: "NucleantBridge", package: "NucleantApplication", condition: .when(platforms: [.android])))
+    }
+    return deps
+}
+
 func nucleantDependencies() -> [Package.Dependency] {
     let repos = ["NucleantVulkan", "NucleantThorVG", "NucleantApplication", "PyShader"]
     return repos.map { name in
@@ -51,7 +77,10 @@ let package = Package(
     dependencies: nucleantDependencies() + [
         // Pinned to the version the sibling packages already resolve, so the
         // toolchain's prebuilt swift-syntax is used instead of a source build.
-        .package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "602.0.0"),
+        // 603 rather than 602: swift-java 0.4.2 — which the Android bootstrap
+        // needs, because 0.1.2 does not compile on Swift 6.3.3 — requires it,
+        // and an `exact:` pin here decides the version for the whole graph.
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "603.0.2"),
     ],
     targets: [
         // Compiler plugin behind `@View` and `#viewID`. Runs at build time only;
@@ -73,10 +102,7 @@ let package = Package(
                 .product(name: "NucleantThorVG", package: "NucleantThorVG"),
                 .product(name: "NucleantApplication", package: "NucleantApplication"),
                 .product(name: "NucleantWindow", package: "NucleantApplication"),
-                .product(name: "Platform_MacOS", package: "NucleantApplication", condition: .when(platforms: [.macOS])),
-                .product(name: "Platform_iOS", package: "NucleantApplication", condition: .when(platforms: [.iOS])),
-                //.product(name: "Platform_Android", package: "NucleantApplication", condition: .when(platforms: [.android]))
-            ],
+            ] + platformProviders(),
             // The default faces (Roboto, Roboto Mono) travel with the library,
             // so text looks the same on every platform and never depends on
             // what fonts the OS happens to ship — see FontRegistry.

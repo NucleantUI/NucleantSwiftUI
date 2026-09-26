@@ -706,22 +706,22 @@ enum LayoutTrace {
         for (index, command) in list.commands.enumerated() {
             switch command {
             case .shape(let draw):
-                fputs(String(
+                nucleantLogError(String(
                     format: "[layout] %3d shape   x=%7.2f y=%7.2f w=%7.2f h=%7.2f\n",
                     index, draw.bounds.minX, draw.bounds.minY, draw.bounds.width, draw.bounds.height
-                ), stderr)
+                ))
             case .text(let draw):
-                fputs(String(
+                nucleantLogError(String(
                     format: "[layout] %3d text    x=%7.2f y=%7.2f w=%7.2f h=%7.2f  %@\n",
                     index, draw.frame.minX, draw.frame.minY, draw.frame.width, draw.frame.height,
                     draw.string
-                ), stderr)
+                ))
             case .image(let draw):
-                fputs(String(
+                nucleantLogError(String(
                     format: "[layout] %3d image   x=%7.2f y=%7.2f w=%7.2f h=%7.2f  %dx%d\n",
                     index, draw.frame.minX, draw.frame.minY, draw.frame.width, draw.frame.height,
                     draw.image.width, draw.image.height
-                ), stderr)
+                ))
             }
         }
     }
@@ -736,7 +736,7 @@ enum InputTrace {
 
     static func log(_ message: @autoclosure () -> String) {
         guard isEnabled else { return }
-        fputs("[input] \(message())\n", stderr)
+        nucleantLogError("[input] \(message())\n")
     }
 }
 
@@ -760,7 +760,7 @@ enum PerfTrace {
 
     static func trace(_ message: @autoclosure () -> String) {
         guard isVerbose else { return }
-        fputs("[perf]   \(message())\n", stderr)
+        nucleantLogError("[perf]   \(message())\n")
     }
 
     static var textMeasures = 0
@@ -788,7 +788,7 @@ enum PerfTrace {
 
     static func log(_ message: @autoclosure () -> String) {
         guard isEnabled else { return }
-        fputs("[perf] \(message())\n", stderr)
+        nucleantLogError("[perf] \(message())\n")
     }
 
     static func millis(since start: UInt64) -> String {

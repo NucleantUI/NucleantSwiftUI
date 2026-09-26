@@ -390,12 +390,12 @@ final class ShaderSlotRegistry {
         }
         if LayoutTrace.isEnabled {
             let s = slot.container.compositeScissor
-            fputs(String(
+            nucleantLogError(String(
                 format: "[layout] shader  rect x=%7.2f y=%7.2f w=%7.2f h=%7.2f  scissor %@\n",
                 rect.minX, rect.minY, rect.width, rect.height,
                 s.map { String(format: "x=%.2f y=%.2f w=%.2f h=%.2f", $0.x, $0.y, $0.z, $0.w) }
                     ?? "none"
-            ), stderr)
+            ))
         }
     }
 
@@ -639,7 +639,7 @@ final class ShaderSlotRegistry {
                 arguments: arguments
             )
         } catch {
-            fputs("NucleantSwiftUI: shader node build (\(width)x\(height)) failed: \(error)\n", stderr)
+            nucleantLogError("NucleantSwiftUI: shader node build (\(width)x\(height)) failed: \(error)\n")
             if let layer {
                 engine.nodes.removeAll { $0.id == layer.container.id }
                 recycle(layer)

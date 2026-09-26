@@ -17,7 +17,12 @@
 
 import Foundation
 import NucleantThorVG
+// Apple-only: the system-font lookup below. Everywhere else the bundled
+// Roboto faces are the whole story — on Android they are also what the OS
+// itself ships, so there is nothing a platform query would add.
+#if canImport(CoreText)
 import CoreText
+#endif
 
 @MainActor
 public enum FontRegistry {
@@ -126,12 +131,14 @@ public enum FontRegistry {
             for name in faceNames(family: family, bold: key.isBold, italic: key.isItalic) {
                 if ensureLoaded(name) { return name }
             }
+            #if canImport(CoreText)
             // Nothing under a macOS-style file name; let CoreText name the
             // file, most specific style first, like `faceNames`.
             for (bold, italic) in styleFallbacks(bold: key.isBold, italic: key.isItalic) {
                 let name = faceNames(family: family, bold: bold, italic: italic)[0]
                 if ensureLoaded(name, coreTextFamily: family, bold: bold, italic: italic) { return name }
             }
+            #endif
         }
         return nil
     }
@@ -174,6 +181,7 @@ public enum FontRegistry {
         return true
     }
 
+    #if canImport(CoreText)
     /// `ensureLoaded(_:)` with CoreText locating the file. Keyed apart from
     /// the file-name lookup so a miss there doesn't poison this one.
     private static func ensureLoaded(_ name: String, coreTextFamily family: String, bold: Bool, italic: Bool) -> Bool {
@@ -215,11 +223,26 @@ public enum FontRegistry {
         }
         return path
     }
+    #endif
 
     private static func locate(_ name: String) -> String? {
-        if let file = bundledFaces[name],
-           let url = Bundle.module.url(forResource: file, withExtension: "ttf", subdirectory: "Fonts") {
-            return url.path
+        if let file = bundledFaces[name] {
+            #if os(Android)
+            // Not `Bundle.module`: its generated accessor resolves against the
+            // executable's directory, which for an Android app is the zygote's
+            // (/system/bin), and it `fatalError`s rather than returning nil —
+            // so it cannot even be tried and allowed to fail. The Activity
+            // unpacks the package's resource bundles next to the app's files
+            // and exports that directory here.
+            if let root = ProcessInfo.processInfo.environment["NUCLEANT_APP_PATH"] {
+                let path = "\(root)/NucleantSwiftUI_NucleantSwiftUI.resources/Fonts/\(file).ttf"
+                if FileManager.default.isReadableFile(atPath: path) { return path }
+            }
+            #else
+            if let url = Bundle.module.url(forResource: file, withExtension: "ttf", subdirectory: "Fonts") {
+                return url.path
+            }
+            #endif
         }
         let manager = FileManager.default
         for directory in searchDirectories {

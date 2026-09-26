@@ -27,6 +27,9 @@ import Platform_iOS
 // `ActiveScene` — the connected `UIWindowScene` the window attaches to.
 import NucleantApplication
 #endif
+#if os(Android)
+import Platform_Android
+#endif
 
 public final class HostingWindow: NucleantWindow, @unchecked Sendable {
 
@@ -43,7 +46,7 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     /// through `assumeIsolated`.
     let host: ViewHost
 
-    #if os(macOS) || os(iOS)
+    #if os(macOS) || os(iOS) || os(Android)
     /// Strongly held: `PlatformWindow` keeps only a weak `win_delegate` back
     /// here, so the window's lifetime is this object's to own.
     var platformWindow: PlatformWindow<HostingWindow>?
@@ -88,6 +91,8 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
             try presentMacOS()
             #elseif os(iOS)
             try presentIOS()
+            #elseif os(Android)
+            presentAndroid()
             #else
             throw HostingWindowError.unsupportedPlatform
             #endif
@@ -219,6 +224,62 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     }
     #endif
 
+    #if os(Android)
+    /// Attach to the Activity's surface.
+    ///
+    /// Inverted from the Apple platforms: there, this creates a window and then
+    /// an engine for it. Android gives the app exactly one surface, owned by the
+    /// Activity and often created before this code runs at all, so
+    /// `PlatformWindow` builds the engine itself the moment a surface is
+    /// available — and does it again whenever the surface is replaced, which
+    /// happens on every background/resume. The canvas is therefore bound in
+    /// `on_surface_recreated()` rather than here; by the time `present()`
+    /// returns, that may already have been called.
+    ///
+    /// Non-throwing for the same reason: there is nothing to fail here. A
+    /// surface that has not arrived yet is the normal case, not an error.
+    @MainActor
+    private func presentAndroid() {
+        nucleantLogError("[trace] presentAndroid: creating PlatformWindow\n")
+        let platformWindow = PlatformWindow<HostingWindow>()
+        self.platformWindow = platformWindow
+        platformWindow.win_delegate = self
+
+        // Android has no pointer: the same two gestures iOS substitutes.
+        host.scrollsOnDrag = true
+        host.opensContextMenuOnLongPress = true
+        // Points-to-pixels, from the display. Android reports it as
+        // `DisplayMetrics.density` and only Java can read it, so the Activity
+        // hands it over before the app starts — see AndroidSurfaceHost. The
+        // surface size arrives in pixels, so this is what turns it into the
+        // points the layout works in.
+        displayScale = AndroidSurfaceHost.displayScale
+        applyColorScheme(Self.systemColorScheme())
+
+        nucleantLogError("[trace] presentAndroid: calling present()\n")
+        platformWindow.present()
+        nucleantLogError("[trace] presentAndroid: present() returned, engine=\(renderEngine != nil)\n")
+    }
+    #endif
+
+    /// The engine was rebuilt against a new surface, so the canvas bound into
+    /// the old one is gone with it.
+    ///
+    /// Only Android calls this: it is the one platform where the render surface
+    /// can be destroyed and recreated under a window that outlives it — every
+    /// background/resume cycle — so the node tree has to be rebound rather than
+    /// rebuilt from scratch.
+    public func on_surface_recreated() {
+        MainActor.assumeIsolated {
+            nucleantLogError("[trace] on_surface_recreated: engine=\(renderEngine != nil) rect=\(win_rect.z)x\(win_rect.w)\n")
+            guard let engine = renderEngine else {
+                nucleantLogError("[trace] on_surface_recreated: NO ENGINE — canvas not attached\n")
+                return
+            }
+            attachCanvas(engine: engine, width: win_rect.z, height: win_rect.w)
+        }
+    }
+
     /// Build the ThorVG node and bind it as the engine's single slot. Mirrors
     /// what `RenderBinder.bindSlot` does for a Python canvas, minus the switch
     /// over canvas kinds — there is only one here.
@@ -229,10 +290,11 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
             // The engine reports *why* on stdout, which is fully buffered when
             // the process isn't attached to a terminal — flush it so the
             // reason lands next to this line rather than being lost.
-            fflush(stdout)
-            fputs("NucleantSwiftUI: ThorVG node build (\(width)x\(height)) failed\n", stderr)
+            nucleantFlushStandardOutput()
+            nucleantLogError("NucleantSwiftUI: ThorVG node build (\(width)x\(height)) failed\n")
             return
         }
+        nucleantLogError("[trace] attachCanvas: node built \(width)x\(height)\n")
         let slot = NucleantRenderNode(
             id: Int.random(in: Int.min...Int.max),
             context: .thor(node)
@@ -288,6 +350,15 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     /// other main-actor block, and the display-link callback is cheap
     /// enough that the loop always drains the queue before the next tick.
     public func onFrame(_ dt: Double) {
+        #if os(Android)
+        // Frames arrive on the UI thread — the Activity's Choreographer posts
+        // them — which is the process main thread, so the isolation holds.
+        // No hop: `DispatchQueue.main.async` would queue onto a main queue
+        // that nothing on Android ever drains.
+        MainActor.assumeIsolated {
+            renderFrame(dt)
+        }
+        #else
         MainActor.assumeIsolated {
             guard !isFramePending else { return }
             isFramePending = true
@@ -299,6 +370,7 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
                 }
             }
         }
+        #endif
     }
 
     /// Rebuild if anything invalidated, then let the engine composite.
@@ -363,6 +435,12 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     private func viewPoint(x: Double, y: Double) -> Point {
         #if os(macOS)
         return Point(x: x, y: contentHeightInPoints - y)
+        #elseif os(Android)
+        // MotionEvent reports pixels; the view tree is laid out in points.
+        // Apple hands UIKit/AppKit coordinates over already in points, which
+        // is why only this platform divides.
+        let scale = displayScale > 0 ? displayScale : 1
+        return Point(x: x / scale, y: y / scale)
         #else
         return Point(x: x, y: y)
         #endif
