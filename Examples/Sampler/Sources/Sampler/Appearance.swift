@@ -9,7 +9,7 @@
 //  itself, so every dynamic color in the app resolves against it.
 //
 
-import NucleantSwiftUI
+import NucleantUI
 import Observation
 
 enum Appearance: CaseIterable {

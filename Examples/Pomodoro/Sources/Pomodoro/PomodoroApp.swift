@@ -12,7 +12,7 @@
 //
 
 import Foundation
-import NucleantSwiftUI
+import NucleantUI
 
 // MARK: - Ticking
 

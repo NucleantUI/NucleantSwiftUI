@@ -2,9 +2,9 @@
 
 import PackageDescription
 
-// A standalone app built on NucleantSwiftUI. The library is taken from the
+// A standalone app built on NucleantUI. The library is taken from the
 // enclosing checkout; in your own project replace the path dependency with
-//   .package(url: "https://github.com/NucleantUI/NucleantSwiftUI.git", branch: "master")
+//   .package(url: "https://github.com/NucleantUI/NucleantUI.git", branch: "master")
 let package = Package(
     name: "Calculator",
     platforms: [.macOS(.v14), .iOS(.v17)],
@@ -14,7 +14,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Calculator",
-            dependencies: [.product(name: "NucleantSwiftUI", package: "NucleantSwiftUI")]
+            dependencies: [.product(name: "NucleantUI", package: "NucleantUI")]
         ),
     ]
 )

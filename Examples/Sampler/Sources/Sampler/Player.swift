@@ -11,7 +11,7 @@
 
 import AVFoundation
 import Foundation
-import NucleantSwiftUI
+import NucleantUI
 
 @MainActor
 final class Player {

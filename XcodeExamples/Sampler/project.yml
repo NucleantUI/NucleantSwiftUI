@@ -13,7 +13,7 @@ options:
   # Package.swift is the source of truth for both minimums.
   xcodeVersion: "26.0"
   # Xcode would otherwise add a scheme per package target, including one
-  # for the library package's own `NucleantSwiftUIDemo` executable — a macOS command
+  # for the library package's own `NucleantUIDemo` executable — a macOS command
   # line tool with the same sources, which is not the app. Only the shared
   # `SamplerApp` scheme is wanted.
   postGenCommand: >-
@@ -33,7 +33,7 @@ options:
 # sibling Nucleant checkouts (`../NucleantVulkan` etc.) the same way it does
 # for `swift build` — see `localDev` there.
 packages:
-  NucleantSwiftUI:
+  NucleantUI:
     path: ../..
 
 settings:
@@ -53,7 +53,7 @@ targets:
       # NucleantApp` is the app's entry point on both platforms.
       - path: ../../Examples/Sampler/Sources/Sampler
     dependencies:
-      - package: NucleantSwiftUI
+      - package: NucleantUI
     settings:
       base:
         PRODUCT_NAME: Sampler
@@ -89,7 +89,7 @@ targets:
       properties:
         CFBundleDisplayName: Sampler
         # iOS. A scene manifest with no delegate class named: UIKit then asks
-        # the app delegate for a configuration, and NucleantSwiftUI's
+        # the app delegate for a configuration, and NucleantUI's
         # `_AppLaunchDelegate` answers with its own scene delegate. That is
         # what lets the demo's `@main` be plain `NucleantApp` on iOS. The
         # empty UILaunchScreen is the system-generated launch screen — without

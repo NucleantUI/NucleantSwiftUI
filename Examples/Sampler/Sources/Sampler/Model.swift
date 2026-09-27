@@ -11,7 +11,7 @@
 import Accelerate
 import Foundation
 import Observation
-import NucleantSwiftUI
+import NucleantUI
 
 // MARK: - Envelope
 

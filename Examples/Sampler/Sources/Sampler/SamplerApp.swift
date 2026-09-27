@@ -21,7 +21,7 @@
 //
 
 import Foundation
-import NucleantSwiftUI
+import NucleantUI
 
 struct Theme {
     static let background = Color.background

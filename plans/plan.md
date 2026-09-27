@@ -155,7 +155,7 @@ repainted only when *its* list changed. See
 
 ## Verified on macOS
 
-`swift build && .build/debug/NucleantSwiftUIDemo`:
+`swift build && .build/debug/NucleantUIDemo`:
 
 - window, text, gradients, shapes, scroll clipping all draw
 - three synthetic clicks on `+` take the counter 0 → 3

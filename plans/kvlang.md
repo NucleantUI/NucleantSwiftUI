@@ -1,11 +1,11 @@
-# `.nkv` — a kv-shaped surface for NucleantSwiftUI
+# `.nkv` — a kv-shaped surface for NucleantUI
 
-What `NucleantSwiftUIDemo/main.swift` looks like written declaratively, in a language
+What `NucleantUIDemo/main.swift` looks like written declaratively, in a language
 borrowing Kivy's *kv* syntax — indentation-scoped nodes, `key: expression` properties,
 `<Rule>:` class definitions, `#:` directives.
 
 Not Kivy: no widgets, no `canvas:` sub-language, no `BoxLayout`. The vocabulary is
-NucleantSwiftUI's own, and every rule is a `struct … : View`.
+NucleantUI's own, and every rule is a `struct … : View`.
 
 ---
 
@@ -72,8 +72,8 @@ Everything is `snake_case` and lowerCamels on the way out: `corner_radius` →
 
 ```kv
 #:nucleant 0.1
-#:import ShaderLibrary  NucleantSwiftUI.ShaderLibrary
-#:import version        NucleantSwiftUI.version
+#:import ShaderLibrary  NucleantUI.ShaderLibrary
+#:import version        NucleantUI.version
 
 #:set PANEL            #1C1F26
 #:set PANEL_HIGHLIGHT  #272B34
@@ -296,7 +296,7 @@ nodes rather than a value, for SwiftUI's trailing-closure pairs.
             height:  .fill
 
             Text:
-                text: "NucleantSwiftUI"
+                text: "NucleantUI"
                 font: .title2
 
             Text:
@@ -382,7 +382,7 @@ nodes rather than a value, for SwiftUI's trailing-closure pairs.
                 Spacer:
 
                 Text:
-                    text:  "NucleantSwiftUI {version}"
+                    text:  "NucleantUI {version}"
                     font:  .footnote
                     color: .secondary
 
@@ -502,7 +502,7 @@ shape as the `destination:`/`label:` slots, just the one every rule has.
 
 ## Mapping
 
-| `.nkv` | NucleantSwiftUI |
+| `.nkv` | NucleantUI |
 |---|---|
 | `<Name>:` | `struct Name: View { … }` |
 | `body:` | `var body: some View { … }` |

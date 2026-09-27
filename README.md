@@ -1,4 +1,4 @@
-# NucleantSwiftUI
+# NucleantUI
 
 SwiftUI-shaped declarative views, drawn by [ThorVG](https://github.com/NucleantUI/NucleantThorVG)
 on [Vulkan](https://github.com/NucleantUI/NucleantVulkan) and hosted by
@@ -7,7 +7,7 @@ Pure Swift, no AppKit/UIKit view hierarchy, runs the same code on macOS and
 iOS. If you know SwiftUI, you already know most of the surface.
 
 ```swift
-import NucleantSwiftUI
+import NucleantUI
 
 @View
 struct Counter {
@@ -35,11 +35,11 @@ struct DemoApp: NucleantApp {
 ## Adding it
 
 ```swift
-.package(url: "https://github.com/NucleantUI/NucleantSwiftUI.git", branch: "master")
+.package(url: "https://github.com/NucleantUI/NucleantUI.git", branch: "master")
 ```
 
-and `import NucleantSwiftUI`. `swift build` at this package's root builds the
-library and the demo (`.build/debug/NucleantSwiftUIDemo`), which is a
+and `import NucleantUI`. `swift build` at this package's root builds the
+library and the demo (`.build/debug/NucleantUIDemo`), which is a
 runnable tour of everything below. The Nucleant packages this depends on are
 resolved from GitHub automatically; when they are checked out as siblings
 of this directory they are used from there instead (`NUCLEANT_LOCAL_DEV=0|1`

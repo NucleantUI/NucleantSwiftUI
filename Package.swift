@@ -49,7 +49,7 @@ let isLinux = !isAndroid
 let isLinux = false
 #endif
 
-/// The platform provider NucleantSwiftUI links directly, for the
+/// The platform provider NucleantUI links directly, for the
 /// `PlatformWindow` that `HostingWindow` owns. Only one is ever in scope.
 func platformProviders() -> [Target.Dependency] {
     var deps: [Target.Dependency] = [
@@ -63,7 +63,7 @@ func platformProviders() -> [Target.Dependency] {
         deps.append(.product(name: "Platform_Android", package: "NucleantApplication", condition: .when(platforms: [.android])))
         // The Java edge (jextract's `org.nucleantui.NucleantBridge`). Linked in
         // here rather than declared by every app, so an Android app's package
-        // names NucleantSwiftUI and nothing else — the same way it does not
+        // names NucleantUI and nothing else — the same way it does not
         // name Platform_Android.
         deps.append(.product(name: "NucleantBridge", package: "NucleantApplication", condition: .when(platforms: [.android])))
     }
@@ -80,14 +80,14 @@ func nucleantDependencies() -> [Package.Dependency] {
 }
 
 let package = Package(
-    name: "NucleantSwiftUI",
+    name: "NucleantUI",
     platforms: [
         .macOS(.v14),
         .iOS(.v17)
     ],
     products: [
-        .library(name: "NucleantSwiftUI", targets: ["NucleantSwiftUI"]),
-        .executable(name: "NucleantSwiftUIDemo", targets: ["NucleantSwiftUIDemo"]),
+        .library(name: "NucleantUI", targets: ["NucleantUI"]),
+        .executable(name: "NucleantUIDemo", targets: ["NucleantUIDemo"]),
         .executable(name: "ExperimentalUITests", targets: ["ExperimentalUITests"]),
     ],
     dependencies: nucleantDependencies() + [
@@ -102,16 +102,16 @@ let package = Package(
         // Compiler plugin behind `@View` and `#viewID`. Runs at build time only;
         // nothing from swift-syntax ends up in the framework.
         .macro(
-            name: "NucleantSwiftUIMacros",
+            name: "NucleantUIMacros",
             dependencies: [
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
             ]
         ),
         .target(
-            name: "NucleantSwiftUI",
+            name: "NucleantUI",
             dependencies: [
-                "NucleantSwiftUIMacros",
+                "NucleantUIMacros",
                 .product(name: "NucleantVulkan", package: "NucleantVulkan"),
                 .product(name: "NucleantShader", package: "NucleantVulkan"),
                 .product(name: "PyShader", package: "PyShader"),
@@ -125,12 +125,12 @@ let package = Package(
             resources: [.copy("Resources/Fonts")]
         ),
         .executableTarget(
-            name: "NucleantSwiftUIDemo",
-            dependencies: ["NucleantSwiftUI"]
+            name: "NucleantUIDemo",
+            dependencies: ["NucleantUI"]
         ),
         .executableTarget(
             name: "ExperimentalUITests",
-            dependencies: ["NucleantSwiftUI", .product(name: "NucleantThorVG", package: "NucleantThorVG")]
+            dependencies: ["NucleantUI", .product(name: "NucleantThorVG", package: "NucleantThorVG")]
         ),
     ]
 )

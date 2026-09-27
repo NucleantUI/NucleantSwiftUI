@@ -79,7 +79,7 @@ project links, Xcode 26.3, macOS destination. In order:
    the *package's* `Sources/` when opened through an `XcodeExamples`
    project: Xcode treats a file under a package root as the package's,
    and the app scheme does not build the package's executable target.
-   Also hit "couldn't load NucleantSwiftUI because it is already opened
+   Also hit "couldn't load NucleantUI because it is already opened
    from another project" — the same local packages cannot be open in two
    Xcode windows at once. Previews have to be tried from *one* project
    that links the package, with the preview file in a target that
@@ -149,7 +149,7 @@ work, and "put `import SwiftUI` in a separate file" is not an answer.
   with "no such module 'SwiftUI'" because SwiftUI is not in the target's
   (explicit) module set, and a plain `import SwiftUI` in the view's file
   clashes with `View`, `Text`, … First thing to try: let the *framework*
-  bring the module in — one file in NucleantSwiftUI with a scoped
+  bring the module in — one file in NucleantUI with a scoped
   import that adds no names (`#if canImport(SwiftUI)
   import protocol SwiftUI.PreviewProvider #endif`), so SwiftUI is a
   transitive dependency of every client target and the thunk's own

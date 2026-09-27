@@ -25,7 +25,7 @@ public struct RunApp { // or whatever it needs to generate for normal desktops /
 ```
 
 # NucleantApplication
-* NucleantSwiftUI-AndroidTests/ksproject_demo/swift/Sources/CAndroidNativeWindow
+* NucleantUI-AndroidTests/ksproject_demo/swift/Sources/CAndroidNativeWindow
 
 seems more to belong in NucleantApplication
 add Swift-Java dependency
@@ -39,5 +39,5 @@ and do its @App
 # demo swift package 
 since CAndroidNativeWindow will be moved to NucleantApplication
 and swift-java etc then.
-we should only need NucleantSwiftUI-AndroidTests/ksproject_demo/swift/Sources/NucleantMain/NucleantSwiftUIDemo.swift
+we should only need NucleantUI-AndroidTests/ksproject_demo/swift/Sources/NucleantMain/NucleantUIDemo.swift
 

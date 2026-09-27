@@ -101,7 +101,7 @@ not in the first cut.
 
 ## 2. `ViewIDMacro` computes the hash
 
-`NucleantSwiftUIMacros/ViewMacro.swift`, `ViewIDMacro.expansion`:
+`NucleantUIMacros/ViewMacro.swift`, `ViewIDMacro.expansion`:
 `context.location(of: node, at: .afterLeadingTrivia, filePathMode: .fileID)`
 → parse the three literals → FNV-1a 64 → `"ViewID(hash: \(literal))"`.
 Emit `Int(bitPattern:)`-style signed literal so it always fits `Int`.

@@ -1,9 +1,9 @@
 //
 //  TvgTesting.swift
-//  NucleantSwiftUI
+//  NucleantUI
 //
 import NucleantThorVG
-import NucleantSwiftUI
+import NucleantUI
 
 
 @View @MainActor

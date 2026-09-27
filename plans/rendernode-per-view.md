@@ -18,7 +18,7 @@ each, `ShaderSlotRegistry`) and the hidden layer canvas behind a
 `NucleantRenderNode` / the Vulkan engine's slot list exists so that *each
 piece of UI owns its own node*: its own image, rasterized only when *it*
 changes, composited into its rect. That is how the rest of Nucleant uses
-render nodes. NucleantSwiftUI collapsed everything into one canvas, so:
+render nodes. NucleantUI collapsed everything into one canvas, so:
 
 - any state change anywhere ⇒ the full window canvas is re-rasterized
   (`canvas.draw()` + `sync()` over the entire scene);
@@ -428,7 +428,7 @@ pooled by size (32). The painter grows (to 8192 rows) when a pass needs
 more than the window, and what still does not fit is painted at the
 next frame (`frameWillDraw`).
 
-Nothing of this is Vulkan or wgpu code in NucleantSwiftUI: `NodePainter`
+Nothing of this is Vulkan or wgpu code in NucleantUI: `NodePainter`
 packs and schedules, `RenderNodeManager` keeps the nodes, and the engine
 copies. Three things the engine lacked for it, all on `render_updates`:
 a sampled image node filled by copy (`ImageNode`, `ImageCopy`,

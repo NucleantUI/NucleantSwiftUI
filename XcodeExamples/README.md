@@ -10,32 +10,32 @@ otherwise; see `localDev` in [Package.swift](../Package.swift)).
 
 | Project | Source | Runs on |
 | --- | --- | --- |
-| [NucleantSwiftUIDemo](NucleantSwiftUIDemo) | [Sources/NucleantSwiftUIDemo](../Sources/NucleantSwiftUIDemo) — the package's demo executable, unchanged | iOS 17+ (iPhone, iPad, simulator), macOS 14+ |
+| [NucleantUIDemo](NucleantUIDemo) | [Sources/NucleantUIDemo](../Sources/NucleantUIDemo) — the package's demo executable, unchanged | iOS 17+ (iPhone, iPad, simulator), macOS 14+ |
 | [Sampler](Sampler) | [Examples/Sampler/Sources/Sampler](../Examples/Sampler/Sources/Sampler) — the drum sampler example (`@Observable` models, `Shader` waveform, AVAudioEngine) | iOS 17+, macOS 14+ |
 
-Each project's app target is named `<Name>App` (`NucleantSwiftUIDemoApp`,
+Each project's app target is named `<Name>App` (`NucleantUIDemoApp`,
 `SamplerApp`) to keep it apart from the SwiftPM executable of the same
 name that Xcode also lists; pick the `…App` scheme.
 
 ## Building
 
-Open a project (`NucleantSwiftUIDemo/NucleantSwiftUIDemo.xcodeproj`,
+Open a project (`NucleantUIDemo/NucleantUIDemo.xcodeproj`,
 `Sampler/Sampler.xcodeproj`), pick its **…App** scheme and a destination,
 run. The first build
-stops on the `NucleantSwiftUIMacros` compiler plugin (`@View`, `#viewID`)
+stops on the `NucleantUIMacros` compiler plugin (`@View`, `#viewID`)
 until you choose *Trust & Enable*; that is a one-time answer per machine.
 
 The other schemes Xcode lists come from the library package itself.
-`NucleantSwiftUIDemo` there is the SwiftPM *executable* — the same source as
+`NucleantUIDemo` there is the SwiftPM *executable* — the same source as
 a macOS command-line tool, not the app; running it on iOS fails at launch
 with a message saying so.
 
 From the command line:
 
 ```sh
-cd XcodeExamples/NucleantSwiftUIDemo
-xcodebuild -scheme NucleantSwiftUIDemoApp -destination 'platform=iOS Simulator,name=iPhone 17' -skipMacroValidation build
-xcodebuild -scheme NucleantSwiftUIDemoApp -destination 'platform=macOS' -skipMacroValidation build
+cd XcodeExamples/NucleantUIDemo
+xcodebuild -scheme NucleantUIDemoApp -destination 'platform=iOS Simulator,name=iPhone 17' -skipMacroValidation build
+xcodebuild -scheme NucleantUIDemoApp -destination 'platform=macOS' -skipMacroValidation build
 ```
 
 `-skipMacroValidation` is the command-line form of the trust prompt.
@@ -58,7 +58,7 @@ directory.
 and checked in so nothing has to be installed to open it:
 
 ```sh
-cd XcodeExamples/NucleantSwiftUIDemo && xcodegen
+cd XcodeExamples/NucleantUIDemo && xcodegen
 ```
 
 Edit the YAML, not the project — the next `xcodegen` overwrites the latter.

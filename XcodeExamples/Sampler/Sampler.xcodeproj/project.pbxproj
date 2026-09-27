@@ -9,14 +9,14 @@
 /* Begin PBXBuildFile section */
 		1A8C21D589ED2B55C51323A4 /* Appearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC72C1071842BD23B6677435 /* Appearance.swift */; };
 		545DD70C8796E1BF8D43FF8B /* SamplerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA626A5E4B6121F32F9D93B2 /* SamplerApp.swift */; };
-		615C71BF32C71685A5C15421 /* NucleantSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = 8EBA0B89058E145E457C7CCF /* NucleantSwiftUI */; };
+		615C71BF32C71685A5C15421 /* NucleantUI in Frameworks */ = {isa = PBXBuildFile; productRef = 8EBA0B89058E145E457C7CCF /* NucleantUI */; };
 		7F30E00A7ACB3CDAC932DAFB /* Model.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1583A120D63C879751307172 /* Model.swift */; };
 		DEFA73BB28CD1820A56F840D /* Player.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE96C878BB82058E7B879549 /* Player.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		1583A120D63C879751307172 /* Model.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model.swift; sourceTree = "<group>"; };
-		2032F3F32158069F0B273E47 /* NucleantSwiftUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NucleantSwiftUI; path = ../..; sourceTree = SOURCE_ROOT; };
+		2032F3F32158069F0B273E47 /* NucleantUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NucleantUI; path = ../..; sourceTree = SOURCE_ROOT; };
 		7147F74DE24BEEC6A2E0C610 /* SamplerApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SamplerApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC72C1071842BD23B6677435 /* Appearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Appearance.swift; sourceTree = "<group>"; };
 		FA626A5E4B6121F32F9D93B2 /* SamplerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamplerApp.swift; sourceTree = "<group>"; };
@@ -28,7 +28,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				615C71BF32C71685A5C15421 /* NucleantSwiftUI in Frameworks */,
+				615C71BF32C71685A5C15421 /* NucleantUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -46,7 +46,7 @@
 		67CC86F719F9F75191170C35 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				2032F3F32158069F0B273E47 /* NucleantSwiftUI */,
+				2032F3F32158069F0B273E47 /* NucleantUI */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -88,7 +88,7 @@
 			);
 			name = SamplerApp;
 			packageProductDependencies = (
-				8EBA0B89058E145E457C7CCF /* NucleantSwiftUI */,
+				8EBA0B89058E145E457C7CCF /* NucleantUI */,
 			);
 			productName = SamplerApp;
 			productReference = 7147F74DE24BEEC6A2E0C610 /* SamplerApp.app */;
@@ -350,9 +350,9 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		8EBA0B89058E145E457C7CCF /* NucleantSwiftUI */ = {
+		8EBA0B89058E145E457C7CCF /* NucleantUI */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = NucleantSwiftUI;
+			productName = NucleantUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

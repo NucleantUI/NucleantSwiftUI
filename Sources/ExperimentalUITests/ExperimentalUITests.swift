@@ -1,10 +1,10 @@
 //
 //  ExperimentalUITests.swift
-//  NucleantSwiftUI
+//  NucleantUI
 //
 // Only to test Render methods
-// not part of NucleantSwiftUI
-import NucleantSwiftUI
+// not part of NucleantUI
+import NucleantUI
 
 public final class RenderNodeManager: @unchecked Sendable {
     

@@ -1,7 +1,7 @@
 # Examples
 
-Seven small apps, each a standalone SwiftPM package that depends on
-NucleantSwiftUI from the enclosing checkout (`.package(path: "../..")`).
+Eight small apps, each a standalone SwiftPM package that depends on
+NucleantUI from the enclosing checkout (`.package(path: "../..")`).
 Build and run any of them from its own directory:
 
 ```sh
@@ -11,7 +11,7 @@ swift build && .build/debug/Calculator
 
 To start your own app from one, copy the directory and change the
 dependency to
-`.package(url: "https://github.com/NucleantUI/NucleantSwiftUI.git", branch: "master")`.
+`.package(url: "https://github.com/NucleantUI/NucleantUI.git", branch: "master")`.
 
 | Example | Kind of app | What it shows |
 | --- | --- | --- |
@@ -22,6 +22,7 @@ dependency to
 | [TwentyFortyEight](TwentyFortyEight) | game | a swipe (`DragGesture.onEnded` + `translation`) driving a value-type board, the whole game in one `@State`, arrow buttons for a mouse |
 | [Pomodoro](Pomodoro) | timer | a Foundation `Timer` on the main run loop writing `@State` once a second; an analog clock and a progress ring as `PathShape`s |
 | [Sampler](Sampler) | audio | `@Observable` models as the source of truth (`Sample`, `SampleBank`, an envelope filled in by a background reduction), `@Bindable` faders, a waveform drawn by a `Shader` fed `ShaderArgument` float arrays, vDSP synthesis and `concurrentPerform` min/max reduction, real playback through `AVAudioEngine`, a 60 Hz playhead written to the model from a timer |
+| [Finder](Finder) | file browser | a Finder list view over an `@Observable` file tree: nested `DisclosureGroup`s built recursively (a folder's content is its children's rows), each bound to `$node.isExpanded` through `@Bindable`; a custom `DisclosureGroupStyle` that stacks label over content so the columns stay aligned while only the name indents; New Folder / Move to Trash editing the tree, and a download growing from a timer, landing in the rows that show them; a `.contextMenu` per row (expand, new folder, duplicate, trash) ending in a row of tag colours that closes the menu through `@Environment(\.contextMenu)`; a sidebar of places with back/forward history |
 
 Things worth knowing that the examples had to work around, since there is no
 text input or timer API in the framework yet: "Add" in Tasks pulls from a

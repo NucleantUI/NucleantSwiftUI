@@ -8,7 +8,7 @@
 //  clear are plain Buttons.
 //
 
-import NucleantSwiftUI
+import NucleantUI
 
 // MARK: - Model
 

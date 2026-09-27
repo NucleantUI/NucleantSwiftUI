@@ -8,7 +8,7 @@ since each CanvasBase type rendered it own VKImage which shader used
 same can be done when using the .shader(ShaderFunctionOrOtherInputTypes) in real SwiftUI
 
 the main Core of our Vulkan Render is designed todo this, so should be easy to express with this
-NucleantSwiftUI besides the current way of displaying shaders
+NucleantUI besides the current way of displaying shaders
 
 ## Outcome
 

@@ -1,0 +1,25 @@
+//
+//  Group.swift
+//  NucleantUI
+//
+
+/// Collects views without affecting layout — its children behave as siblings
+/// of whatever contains the group.
+@View
+public struct Group<Content: View>: View {
+    public let content: Content
+
+    public init(_viewID: ViewID = #viewID, @ViewBuilder content: () -> Content) {
+        self.content = content()
+        self._viewID = _viewID
+    }
+
+    public var body: Never { bodyUnavailable() }
+}
+
+extension Group: BuiltinView {
+    func makeNode(_ context: inout BuildContext) -> ViewNode {
+        let child = context.child(0) { ctx in buildNode(content, &ctx) }
+        return ViewNode(content: GroupContent(), children: [child])
+    }
+}

@@ -1,0 +1,93 @@
+//
+//  ViewID.swift
+//  NucleantUI
+//
+//  Call-site identity for views, and the `@View` macro that hands it out.
+//
+//  Structural position (`BuildContext.path`) already tells two *instances*
+//  apart — the third row of a `ForEach` from the fourth. It cannot tell two
+//  *call sites* apart when they land in the same position: `flag ? Row("a")
+//  : Row("b")` builds the same type at the same path either way. `ViewID`
+//  is the source location the view was constructed at, and together with the
+//  path and the type it is what the builder treats as "the same view" when
+//  deciding whether the tree it built last time can be kept.
+//
+
+/// Where a view was constructed: file, line and column, hashed at compile
+/// time by `#viewID`. Nothing at runtime needs the location back — only
+/// that two views from the same place get the same value and two from
+/// different places don't — so this is the hash alone: one `Int` to copy,
+/// compare and hash, no string. The value is fixed by the source, not by a
+/// per-process seed, so a view's keys are the same from one run to the next.
+public struct ViewID: Hashable, Sendable {
+    public let hash: Int
+
+    public init(hash: Int) {
+        self.hash = hash
+    }
+
+    /// No call site: a view that was neither stamped by a builder nor made
+    /// through a `@View` init. Identity then rests on position and type.
+    public static let unknown = ViewID(hash: 0)
+}
+
+/// The identity of the place this is written, as a literal.
+///
+/// Meant as a default argument — `_viewID: ViewID = #viewID` — where it is
+/// expanded at the *call* site (SE-0422), the implicit call a `@ViewBuilder`
+/// body makes for each view expression included. A plain initializer with
+/// `#line` defaults can't do that: nested magic literals name the line they
+/// are written on, which for a default argument is the declaration. The
+/// macro sees the call site's file, line and column and expands to
+/// `ViewID(hash:)` of them — the hash is the compiler's work, not the
+/// program's.
+@freestanding(expression)
+public macro viewID() -> ViewID = #externalMacro(module: "NucleantUIMacros", type: "ViewIDMacro")
+
+/// Makes a struct an identified, comparable view.
+///
+/// ```swift
+/// @View
+/// struct Row {
+///     let title: String
+///     @Binding var level: Double
+///     @State private var expanded = false
+///
+///     var body: some View { … }
+/// }
+/// ```
+///
+/// Generates, from the struct's own declaration, the three members the
+/// builder asks every `View` for — the ones a plain `struct S: View` falls
+/// back to reflection for:
+///
+/// * `_viewID`, stored, so `@ViewBuilder` can stamp the call site on it;
+/// * `_bindDynamicProperties`, listing the wrappers statically — no `Mirror`;
+/// * `_isEquivalent(to:)`, comparing every stored property that is an
+///   *input* (`@State` is owned rather than received, and `@Environment` is
+///   compared by the builder separately, so both are left out) with the
+///   comparison resolved at compile time wherever the type allows.
+///
+/// When the struct declares no initializer, one is generated with a trailing
+/// `_viewID: ViewID = #viewID` parameter, for views constructed outside a
+/// builder.
+///
+/// A stored closure is not compared at all — there is nothing to compare two
+/// closures by — so a view whose only difference is a closure is *equivalent*
+/// and is kept. The closure the view then runs is the one from the build that
+/// created it: capture a `Binding`, a `@State` holder or a model object in it,
+/// never a plain value the parent may change (`{ delete(userID) }` with
+/// `userID` a `let` of the parent keeps the old id; `{ delete(model.userID) }`
+/// reads the live one). A view with nothing but closures — a canvas view — is
+/// equivalent to every other value of itself, which is the point: its work is
+/// driven by what its closures read, not by who re-ran the parent.
+///
+/// The builder uses the result like SwiftUI does: when a parent's body re-runs
+/// and produces a child that is equivalent to the one already standing at the
+/// same position — same type, same identity, same inputs, same environment,
+/// and no state it reads has changed — the child's whole subtree is kept and
+/// its body is not evaluated.
+@attached(extension, conformances: View)
+@attached(memberAttribute)
+@attached(member, names: named(_viewID), named(_isEquivalent), named(_bindDynamicProperties), named(init))
+public macro View() = #externalMacro(module: "NucleantUIMacros", type: "ViewMacro")

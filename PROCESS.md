@@ -25,7 +25,7 @@ Read, in order:
   an implementation to port. Everything below the `View` protocol is new.
 * **`View: AnyObject` in `SwiftNucleatUI` was a dead end.** SwiftUI views are
   value types; making them classes breaks `@ViewBuilder` ergonomics and
-  identity. `NucleantSwiftUI` uses structs, like SDLUI did.
+  identity. `NucleantUI` uses structs, like SDLUI did.
 * **One canvas, not one per view.** `RenderBinder` gives each *widget* its own
   GPU node because a Kivy-style widget tree is coarse. A SwiftUI tree is not —
   a node per `Text` would be hundreds of wgpu targets. So: one window-filling
@@ -147,7 +147,7 @@ which is what made (1) visible at all.
 
 ## 4. Verified on macOS
 
-`swift build` at the package root, then `.build/debug/NucleantSwiftUIDemo`.
+`swift build` at the package root, then `.build/debug/NucleantUIDemo`.
 
 * The window comes up, the ThorVG node imports as a VkImage
   (`VK_EXT_metal_objects`), and the tree draws: text, gradients, rounded
@@ -723,7 +723,7 @@ explicitly, since the role does not reach them.
 
 ### `@View`
 
-Three roles on one attribute (`Sources/NucleantSwiftUIMacros`):
+Three roles on one attribute (`Sources/NucleantUIMacros`):
 
 * extension: `View` (if not declared) and `IdentifiedView`.
 * memberAttribute: `@MainActor` as above.
@@ -1287,16 +1287,16 @@ the delegate:
   UIKit's `configurationForConnecting` with `_AppSceneDelegate`, which
   stores the scene in `ActiveScene.current` and only then presents. The
   configuration is built in code rather than named in Info.plist so the
-  app's plist never has to spell `NucleantSwiftUI._AppSceneDelegate`. An
+  app's plist never has to spell `NucleantUI._AppSceneDelegate`. An
   app without a scene manifest still works — UIKit then never asks, and
   `didFinishLaunching` presents onto a screen-sized frame.
 
 The project itself is xcodegen over the demo's existing source
 ([XcodeExamples/](XcodeExamples)), one target with iOS and macOS
 destinations, depending on the checkout as a local package. Two things
-were not obvious: the package's own `NucleantSwiftUIDemo` executable gets
+were not obvious: the package's own `NucleantUIDemo` executable gets
 an auto-created scheme with the same name as the app, so the app target
-is `NucleantSwiftUIDemoApp` and auto-creation is turned off in the
+is `NucleantUIDemoApp` and auto-creation is turned off in the
 workspace settings; and Xcode's "requires a development team" check for
 the macOS build reads the *unconditioned* `CODE_SIGN_IDENTITY` on the
 target, where xcodegen's application preset puts `"iPhone Developer"` —
@@ -1728,7 +1728,7 @@ three ways: `RenderNodeManager` keeps refs, lifetime, pools and the
 engine's list order — nothing else; `NodePainter` packs and schedules;
 `RenderBoundaries` keeps the frame stack and splits runs. Views draw into
 the nodes they pull (`DrawingGroupContent`, `ThorCanvasContent`). No
-`vk*`/`wgpu*` call remains in NucleantSwiftUI's node code.
+`vk*`/`wgpu*` call remains in NucleantUI's node code.
 
 A node whose list changed in a few commands repaints only the rect those
 commands touch (prefix/suffix diff → damage rect → the commands reaching

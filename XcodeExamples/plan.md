@@ -1,15 +1,15 @@
 # Xcode examples
 
-Goal: the Nucleant packages all build for iOS, so give NucleantSwiftUI a
+Goal: the Nucleant packages all build for iOS, so give NucleantUI a
 place to prove that — Xcode projects over the existing sources, iOS first,
 macOS from the same project. Notes on what was done and why are in
 [README.md](README.md).
 
 ## Done
 
-- [x] `NucleantSwiftUIDemo/` — xcodegen project (`project.yml` + generated,
+- [x] `NucleantUIDemo/` — xcodegen project (`project.yml` + generated,
       checked-in `.xcodeproj`) whose app target compiles
-      `Sources/NucleantSwiftUIDemo` directly and depends on the package at
+      `Sources/NucleantUIDemo` directly and depends on the package at
       `../..`. One target, destinations iOS + macOS.
 - [x] Library launches as a real iOS app: `AppRuntime.run()` on iOS now calls
       `UIApplicationMain` with a non-generic delegate pair
