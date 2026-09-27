@@ -442,6 +442,7 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         // queue. A hop through `DispatchQueue.main.async` would queue frames
         // that nothing ever drains, which is a window that stays black.
         MainActor.assumeIsolated {
+            pumpMainRunLoop()
             renderFrame(dt)
         }
         #else
@@ -458,6 +459,32 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         }
         #endif
     }
+
+    #if os(Android) || os(Linux)
+    /// Give `RunLoop.main` one non-blocking turn, before the frame.
+    ///
+    /// The loop that calls `onFrame` is the platform's, not Foundation's, so
+    /// on these two platforms nothing ever *ran* the main run loop: a
+    /// `Timer` added to it never fired, and `DispatchQueue.main.async`,
+    /// `Task { @MainActor in … }` and `await MainActor.run` were never
+    /// drained either — the main-actor executor enqueues onto the main
+    /// dispatch queue, which the run loop is what services. Anything an app
+    /// scheduled rather than handled inline was simply dropped on the floor;
+    /// seen as a once-a-second clock that never advanced.
+    ///
+    /// `before:` a date already past makes this a single pass that fires
+    /// what is due and returns rather than blocking for more, which is the
+    /// only shape that can be folded into someone else's loop. Before
+    /// `renderFrame` so state a timer writes is picked up by *this* frame
+    /// instead of waiting for the next one.
+    ///
+    /// Not needed on macOS or iOS: `NSApplication.run()` and
+    /// `UIApplicationMain` are run loops, and pumping a run loop from inside
+    /// its own callback is how you get re-entrant frames.
+    private func pumpMainRunLoop() {
+        _ = RunLoop.main.run(mode: .default, before: Date())
+    }
+    #endif
 
     /// Rebuild if anything invalidated, then let the engine composite.
     @MainActor
