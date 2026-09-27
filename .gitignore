@@ -8,6 +8,6 @@ DerivedData/
 .vscode/
 *.ips
 Examples/*/.build
-Examples/*/Package.resolved
+Package.resolved
 .build-android-x86_64
 .build-host
