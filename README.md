@@ -628,6 +628,6 @@ their subtree. `=2` is how to find out why one did not.
 
 ## Where to read more
 
-* [plan.md](plan.md) — the surface, what is done, known limits, what is next.
+* [plan.md](plans/plan.md) — the surface, what is done, known limits, what is next.
 * [PROCESS.md](PROCESS.md) — the decisions, the measurements behind them,
   and the bugs found along the way.

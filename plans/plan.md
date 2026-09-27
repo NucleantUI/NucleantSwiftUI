@@ -7,7 +7,7 @@ Python, no SDL).
 Same API *shape* as `research/TouchBay-UI-SDK/Sources/SDLUI`; same *engine* as
 `PyNucleantUI` (NucleantApplication → NucleantVulkan → NucleantThorVG).
 
-Progress notes and decisions live in [PROCESS.md](PROCESS.md).
+Progress notes and decisions live in [PROCESS.md](../PROCESS.md).
 
 # Research
 
@@ -90,6 +90,10 @@ repainted only when *its* list changed. See
 - [x] `VStack`, `HStack`, `ZStack`, `Group`, `ForEach`
 - [x] `Button`, `ScrollView`
 - [x] `NavigationStack`, `NavigationLink`
+- [x] `DisclosureGroup` — all six SwiftUI inits bar `LocalizedStringKey`
+      (not in the framework), `isExpanded:` binding or its own state,
+      content built only while open; `DisclosureGroupStyle` /
+      `.automatic` / `.disclosureGroupStyle(_:)` (§29)
 - [x] `Shader` — GLSL 450 compute on its own GPU node (`OGLShaderNode`), with
       file-scope `functions:` alongside the per-pixel body
 - [x] `ShaderLibrary` — 8 bundled shaders, 5 ported from TouchBay's collection
@@ -167,7 +171,7 @@ repainted only when *its* list changed. See
   interactive (fader drag, `+`), with the effect toggled off and on, the
   window resized and maximized, then `Back`, `Back`
 
-See [PROCESS.md](PROCESS.md) §4, §7, §8.
+See [PROCESS.md](../PROCESS.md) §4, §7, §8.
 
 Two fixes landed outside this package: `Platform_MacOS.PlatformWindow.mouseUp`
 routed to `mouseDown` (and `rightMouseUp` to `rightMouseDown`), so pointer
@@ -176,7 +180,7 @@ included. `NucleantApplication/Sources/Platform_MacOS/Platform_MacOS.swift:93,10
 
 `scrollWheel` in the same file forwarded the legacy line-based `event.deltaY`
 rather than `scrollingDeltaY`, so one wheel notch scrolled 1–4 points instead of
-~48, and a trackpad drag barely moved at all. See [PROCESS.md](PROCESS.md) §13.
+~48, and a trackpad drag barely moved at all. See [PROCESS.md](../PROCESS.md) §13.
 
 ## Change detection
 
@@ -205,7 +209,7 @@ Traces: `NUCLEANT_SWIFTUI_TRACE_PERF=1` (rebuild kind, timing, cache misses,
 why, and each shader slot built with its cost),
 `NUCLEANT_SWIFTUI_TRACE_INPUT=1` (hit testing),
 `NUCLEANT_SWIFTUI_TRACE_LAYOUT=1` (the placed display list).
-[PROCESS.md](PROCESS.md) §5–7, §16.
+[PROCESS.md](../PROCESS.md) §5–7, §16.
 
 ## Known limits
 

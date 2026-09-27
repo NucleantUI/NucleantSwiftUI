@@ -68,5 +68,5 @@ Done as sketched, with two corrections found by probing the compiler:
   generated `_isEquivalent(to:)` covers the rest of the stored properties.
 
 `@View struct Row { … }` — see `Core/ViewID.swift`, `Core/Equivalence.swift`,
-`buildNode` in `Layout/ViewNode.swift`, and [PROCESS.md](PROCESS.md) §16 for
+`buildNode` in `Layout/ViewNode.swift`, and [PROCESS.md](../PROCESS.md) §16 for
 the numbers and the limits.

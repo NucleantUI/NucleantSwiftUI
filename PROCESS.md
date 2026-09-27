@@ -1,7 +1,7 @@
 # Process log
 
 Running notes: what was decided, why, and what state the build is in.
-The checklist lives in [plan.md](plan.md).
+The checklist lives in [plan.md](plans/plan.md).
 
 ## 0. Research pass
 
@@ -1622,7 +1622,7 @@ closes it without a choice.
 ## 28. Render nodes per view
 
 The window's one ThorVG canvas was a misunderstanding of the engine — see
-[rendernode-per-view.md](rendernode-per-view.md) for the argument and the
+[rendernode-per-view.md](plans/rendernode-per-view.md) for the argument and the
 decisions. What landed, additively, beside it:
 
 `RenderNodeManager` (`App/RenderNodeManager.swift`) keeps a ThorVG canvas
@@ -1759,4 +1759,63 @@ Found on the way, and older than this work: a pass-through wrapper
 rebuild of the child the wrapper's next reuse grafted the stale subtree
 back — a meter under an `if` showed its first-build value.
 `RebuildRecords.replaceNode` fixes the records when a child is swapped.
-Details in [rendernode-per-view.md](rendernode-per-view.md).
+Details in [rendernode-per-view.md](plans/rendernode-per-view.md).
+
+## 29. DisclosureGroup
+
+[disclosuregroup.md](plans/disclosuregroup.md) gave the view's initializers;
+`research/SwiftUI-api` added the style layer around it —
+`DisclosureGroupStyle`, `DisclosureGroupStyleConfiguration` (`label`,
+`content`, `@Binding isExpanded`), `AutomaticDisclosureGroupStyle` and
+`.disclosureGroupStyle(_:)`. All of it is in `Views/DisclosureGroup.swift`.
+
+`DisclosureGroup` is an `@View`. Its inits take `_viewID: ViewID = #viewID`
+ahead of the trailing closures, as `Group`'s does. The `Text`-label inits
+are the `String` and `StringProtocol` ones; there is no `LocalizedStringKey`
+here to take. The expansion is the caller's binding when there is one and
+a `@State` of the group's otherwise. The optional binding sits in a small
+`ExpansionSource: ViewInput`, because `@View`'s equivalence would compare an
+`Optional<Binding<Bool>>` through `Equatable` (by value) rather than by
+source, which is how `Binding` itself compares.
+
+No `AnyView` and no `any DisclosureGroupStyle`. The first cut had both, and
+they were rejected. A style is only known from the environment, so a
+group's body is one concrete builtin view, `_StyledDisclosureGroup`, which
+picks the style in `makeNode`: the one set by the modifier, or `.automatic`.
+The environment holds the style as `DisclosureGroupStyleBox`, a `ViewInput`
+struct over an abstract `DisclosureGroupStyleStorage` class whose generic
+subclass keeps the style at its own type. It builds `makeBody` statically,
+and it counts the same style set again as equivalent, so re-applying a
+modifier is not an environment change. The configuration's `Label` and
+`Content` cannot be generic, because the style protocol's `makeBody` is not
+generic over them. So each stores the function that builds its node, and
+`Content`'s runs only if the style places it. A collapsed group never calls
+the content closure. They stay plain views, not `@View`: a closure-only
+`@View` would always be equivalent and keep a stale label.
+
+The automatic style is a view of its own, `_AutomaticDisclosureGroup`.
+It reads `isEnabled`, and it is the reader of `isExpanded`, so a toggle
+rebuilds it and not the group or the group's parent (unless the parent
+reads the binding too). It draws `Menu`'s "›" in a 12pt column, turned 90°
+while open, then the label, then a `Spacer`, so a tap anywhere on the row
+toggles. The content is padded 18 from the leading edge, and a disabled
+group dims to 0.4 and takes no taps (`onTapGesture` reads `isEnabled`).
+
+The known trade is the one `@View` documents. The content closure is not
+compared, so content that captures a plain value of the parent keeps the
+old value until the group itself rebuilds. Content that captures state, a
+binding or a model reads the live value.
+
+Verified headless (a scratch package driving `ViewHost` with
+`pointerDown`/`pointerUp`, not the demo). Four groups: local state, bound
+to the parent's `@State`, a custom show/hide style, and disabled. Each tap
+opened its group and built the content exactly once. The bound group wrote
+the parent's state (the parent's body saw `true`, then `false` on the
+second tap). The styled group toggled through `configuration.isExpanded`.
+The disabled one never built its content. Collapsing and reopening a group
+built its content again.
+
+Also found on the way: `.build/x86_64-apple-macosx/debug` held modules from
+Swift 6.3.1, which the 6.3.3 compiler refuses to import
+(`SwiftCompilerPlugin.swiftmodule`, in the macro target). Deleting that
+directory was all it took.
