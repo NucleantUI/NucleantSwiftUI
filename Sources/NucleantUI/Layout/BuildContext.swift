@@ -31,9 +31,24 @@ public struct BuildContext {
 
     let store: StateStore
 
-    /// `onAppear` actions collected during this pass, run once the tree is
-    /// built. Reference-boxed so a copied context still appends to one list.
+    /// `onAppear` / `onDisappear` actions collected during this pass, run
+    /// once the tree is built. Reference-boxed so a copied context still
+    /// appends to one list.
     let effects: EffectQueue
+
+    /// The tree's animation clock and animated values.
+    let animations: AnimationStore
+
+    /// The context of the change being built — whether what it alters
+    /// animates. `.animation(_:value:)` and `.transaction` adjust it for
+    /// their subtree.
+    var transaction = Transaction()
+
+    /// True while a builtin rebuilds a view that stood at this position
+    /// before, as opposed to building one that is new here. Set by
+    /// `buildNode` for each builtin's `makeNode`; an `if` or a `ForEach`
+    /// only transitions children in and out of a container that stood.
+    var isReplacingStandingView = false
 
     /// Where each view's "how to rebuild me here" entry is filed.
     let records: RebuildRecords
@@ -46,12 +61,14 @@ public struct BuildContext {
         environment: EnvironmentValues,
         store: StateStore,
         effects: EffectQueue,
+        animations: AnimationStore,
         records: RebuildRecords,
         dirtyPaths: Set<[Int]> = []
     ) {
         self.environment = environment
         self.store = store
         self.effects = effects
+        self.animations = animations
         self.records = records
         let trie = PathTrie<Void>()
         for path in dirtyPaths { trie.set((), at: path) }
@@ -95,7 +112,8 @@ public struct BuildContext {
     }
 }
 
-/// Deferred work a build pass produced — currently just `onAppear` bodies.
+/// Deferred work a build pass produced — `onAppear` and `onDisappear`
+/// bodies.
 @MainActor
 final class EffectQueue {
     /// Identities that have already run their `onAppear`, so it fires once per
@@ -103,10 +121,18 @@ final class EffectQueue {
     private var appeared: Set<StateKey> = []
     private var pending: [() -> Void] = []
 
+    /// The `onDisappear` action of every view standing — the latest build's,
+    /// so it runs with what that build captured.
+    private var disappearing: [StateKey: () -> Void] = [:]
+
     func onAppear(_ key: StateKey, _ action: @escaping () -> Void) {
         guard !appeared.contains(key) else { return }
         appeared.insert(key)
         pending.append(action)
+    }
+
+    func onDisappear(_ key: StateKey, _ action: @escaping () -> Void) {
+        disappearing[key] = action
     }
 
     /// Hand back the actions queued this pass.
@@ -115,10 +141,17 @@ final class EffectQueue {
         return pending
     }
 
-    /// Forget the views at `paths`, so one that comes back appears again.
+    /// Forget the views at `paths`, so one that comes back appears again —
+    /// and run their `onDisappear` actions with this pass's effects.
     func forget(paths: Set<[Int]>) {
-        guard !appeared.isEmpty else { return }
-        appeared = appeared.filter { !paths.contains($0.path) }
+        if !appeared.isEmpty {
+            appeared = appeared.filter { !paths.contains($0.path) }
+        }
+        guard !disappearing.isEmpty else { return }
+        for (key, action) in disappearing where paths.contains(key.path) {
+            disappearing[key] = nil
+            pending.append(action)
+        }
     }
 }
 
@@ -323,6 +356,16 @@ final class RebuildRecords {
     }
 
     func node(for path: [Int]) -> ViewNode? { live.value(at: path)?.node }
+
+    /// What still stands, un-rebuilt, directly under `path` in the subtree
+    /// being rebuilt — by slot. Asked by a container once its new children
+    /// are built: whatever is left is a child it no longer has.
+    func leftoverChildren(under path: [Int]) -> [(Int, ViewNode)] {
+        guard let node = previousNode(at: path) else { return [] }
+        return node.children.compactMap { index, child in
+            child.value.map { (index, $0.node) }
+        }
+    }
 
     /// Finish the rebuild: whatever is still `previous` belonged to views that
     /// are no longer in the tree. Returned with their paths so the caller can

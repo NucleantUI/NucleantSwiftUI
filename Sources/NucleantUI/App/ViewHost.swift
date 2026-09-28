@@ -17,6 +17,7 @@ public final class ViewHost {
 
     private let store = StateStore()
     private let effects = EffectQueue()
+    private let animations = AnimationStore()
 
     /// The laid-out tree from the last build. Hit testing reads the frames it
     /// carries, so it outlives the build that produced it.
@@ -174,12 +175,31 @@ public final class ViewHost {
     /// landed entirely in per-view render nodes, which mark themselves.
     @discardableResult
     public func update() -> Bool {
+        // One instant for the whole frame: everything placed in it is
+        // sampled at the same time.
+        AnimationStore.current = animations
+        defer { AnimationStore.current = nil }
+        animations.beginFrame()
+        animations.invalidateScheduledRebuilds()
+
+        // `withAnimation` completions whose animations are over — run last,
+        // however this frame goes, so one that writes state marks the next.
+        let completions = animations.takeDueCompletions()
+        defer {
+            for completion in completions { completion.run() }
+        }
+
         let work = Invalidator.shared.consume()
         let full = needsFullRebuild || work.full
-        guard full || !work.paths.isEmpty || needsRepaint else { return false }
+        // Something still moving is laid out again even with nothing dirty.
+        guard full || !work.paths.isEmpty || needsRepaint || animations.wantsFrame else { return false }
         guard size.width > 0, size.height > 0 else { return false }
         needsFullRebuild = false
         needsRepaint = false
+
+        let builds = full || !work.paths.isEmpty
+        animations.beginPass(transaction: builds ? work.transaction : nil, isCommit: builds)
+        let transaction = work.transaction ?? Transaction()
 
         let started = PerfTrace.isEnabled ? DispatchTime.now().uptimeNanoseconds : 0
         PerfTrace.reset()
@@ -189,17 +209,17 @@ public final class ViewHost {
         // case worth seeing.
         let kind: String
         if full {
-            rebuildAll(dirty: work.paths)
+            rebuildAll(dirty: work.paths, transaction: transaction)
             kind = "full"
         } else if work.paths.isEmpty {
             kind = "repaint"
-        } else if rebuildScoped(work.paths) {
+        } else if rebuildScoped(work.paths, transaction: transaction) {
             kind = "scoped(\(work.paths.count))"
         } else {
             // A dirty path with no record, or one whose node has since been
             // detached: the tree is not the shape the record described, so the
             // only safe answer is to build it again.
-            rebuildAll(dirty: work.paths)
+            rebuildAll(dirty: work.paths, transaction: transaction)
             kind = "fallback"
         }
 
@@ -211,6 +231,7 @@ public final class ViewHost {
 
         let built = PerfTrace.isEnabled ? DispatchTime.now().uptimeNanoseconds : 0
         let windowRedrawn = layoutAndRender()
+        animations.endPass()
 
         if PerfTrace.isEnabled {
             let now = DispatchTime.now().uptimeNanoseconds
@@ -248,15 +269,17 @@ public final class ViewHost {
     /// not how much gets built: every child the root produces is still
     /// compared against what stood there, and kept if equivalent — which is
     /// why a resize, whose views are all unchanged, mostly reuses.
-    private func rebuildAll(dirty: Set<[Int]>) {
+    private func rebuildAll(dirty: Set<[Int]>, transaction: Transaction) {
         records.beginRebuild(under: [])
         var context = BuildContext(
             environment: environment,
             store: store,
             effects: effects,
+            animations: animations,
             records: records,
             dirtyPaths: dirty
         )
+        context.transaction = transaction
         let overlay = _HostOverlay(
             popovers: popoverPresenter,
             contextMenu: contextMenu.map { menu in
@@ -274,7 +297,7 @@ public final class ViewHost {
     ///
     /// Returns false when any dirty path can't be served this way, leaving the
     /// tree untouched so the caller can fall back to a full rebuild.
-    private func rebuildScoped(_ paths: Set<[Int]>) -> Bool {
+    private func rebuildScoped(_ paths: Set<[Int]>, transaction: Transaction) -> Bool {
         guard rootNode != nil else { return false }
 
         // Outermost first, and skip any path already covered by an ancestor
@@ -299,9 +322,11 @@ public final class ViewHost {
                 environment: record.environment,
                 store: store,
                 effects: effects,
+                animations: animations,
                 records: records,
                 dirtyPaths: paths
             )
+            context.transaction = transaction
             context.path = path
             context.stackAxis = record.stackAxis
             let replacement = record.rebuild(&context)
@@ -329,7 +354,9 @@ public final class ViewHost {
             }
             store.release(entry.stateKeys)
         }
-        effects.forget(paths: Set(departed.map { $0.0 }))
+        let paths = Set(departed.map { $0.0 })
+        effects.forget(paths: paths)
+        animations.forget(paths: paths)
     }
 
     /// Lay the tree out and paint it. Returns whether the window canvas was
@@ -351,10 +378,16 @@ public final class ViewHost {
         var list = DisplayList()
         overlay.list = DisplayList()
         overlay.order = nil
+        var context = DrawContext(colorScheme: environment.colorScheme)
+        // What moved in the frame that built it moves the way the change
+        // said; in the frames after, it only follows.
+        if animations.isCommitPass {
+            context.animation = animations.transaction.animation
+        }
         node.place(
             in: window,
             proposal: ProposedSize(size),
-            context: DrawContext(colorScheme: environment.colorScheme),
+            context: context,
             into: &list
         )
         // Over everything, and outside the tree: the preview is drawn, never

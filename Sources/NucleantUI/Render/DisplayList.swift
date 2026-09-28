@@ -253,6 +253,16 @@ public struct DrawContext: Sendable {
     /// or shader slot inside is cut by this and by `clip` both.
     var nodeClip: Rect?
 
+    /// How a node placed somewhere new in this pass moves there — the
+    /// transaction's animation, or `.animation(_:value:)`'s below it. Only
+    /// set in a pass that built something; `nil` means it jumps.
+    var animation: Animation?
+
+    /// True inside a view being drawn where it was, not where layout puts
+    /// it — a removed view exiting, a drag snapshot. Nothing inside starts
+    /// or follows motion, and no node's remembered rect is disturbed.
+    var freezesMotion = false
+
     /// What a render node or shader slot placed here is cut to at the
     /// composite: every clip above it, whichever node took it over.
     var compositeClip: Rect? {

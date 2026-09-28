@@ -159,9 +159,24 @@ final class NodePainter {
     /// What to draw for an entry, with the paint region's corner at the
     /// origin: everything for a whole image; for a damaged part, the
     /// commands that reach into it, cut to it.
+    ///
+    /// Either way cut to the region: the images share one canvas, and an
+    /// image covers only the part of its view inside the window — a view
+    /// partly off screen (one flung away mid-animation) would otherwise
+    /// paint on into the image packed beside it.
     private func paintList(of entry: ImageEntry) -> DisplayList {
         guard let pending = entry.pending else { return DisplayList() }
-        guard let damage = entry.damage else { return pending }
+        guard let damage = entry.damage else {
+            let size = paintSize(of: entry)
+            let region = Rect(x: 0, y: 0, width: Double(size.width) / scale, height: Double(size.height) / scale)
+            var commands: [DrawCommand] = []
+            commands.reserveCapacity(pending.commands.count)
+            for command in pending.commands {
+                guard let bounds = command.paintBounds else { continue }
+                commands.append(region.contains(bounds) ? command : command.clipped(to: region))
+            }
+            return DisplayList(commands: commands)
+        }
         var commands: [DrawCommand] = []
         for command in pending.commands {
             guard let bounds = command.paintBounds, bounds.intersects(damage) else { continue }

@@ -89,8 +89,9 @@ extension ViewNode {
     /// Depth-first with children reversed: the display list paints children in
     /// order, so the last one drawn is on top and must be tested first.
     func hitTest<Value>(_ point: Point, select: (ViewNode) -> Value?) -> Hit<Value>? {
-        // Off screen, whatever the frames left over from an earlier pass say.
-        guard !content.isParked else { return nil }
+        // Off screen, whatever the frames left over from an earlier pass say
+        // — or on its way out, drawn but no longer there.
+        guard !content.isParked, removal == nil else { return nil }
         // A clipping node's children only exist inside its frame.
         if content.clipsChildren {
             guard let local = mapIntoLocalSpace(point), frame.contains(local) else { return nil }

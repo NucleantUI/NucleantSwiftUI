@@ -51,6 +51,7 @@ final class DragSession {
                 environment: source.value.environment,
                 store: StateStore(),
                 effects: EffectQueue(),
+                animations: AnimationStore(),
                 records: RebuildRecords()
             )
             context.path = [-1]
@@ -68,6 +69,7 @@ final class DragSession {
             // The snapshot wants the pixels of a drawing group inside, not a
             // node that would keep compositing at the view's old place.
             context.flattensRenderNodes = true
+            context.freezesMotion = true
             var list = DisplayList()
             source.node.place(in: source.frame, proposal: source.value.proposal, context: context, into: &list)
             preview = .snapshot(list.commands)
@@ -116,6 +118,7 @@ final class DragSession {
         var faded = DrawContext(colorScheme: colorScheme)
         faded.opacity = Self.previewOpacity
         faded.flattensRenderNodes = true
+        faded.freezesMotion = true
         switch preview {
         case .snapshot(let commands):
             let dx = location.x - origin.x

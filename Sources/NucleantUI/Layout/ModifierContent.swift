@@ -229,11 +229,11 @@ struct DecorationContent: NodeContent {
 
 /// `.opacity(_:)`.
 struct OpacityContent: NodeContent {
-    let opacity: Double
+    let opacity: AnimatedVector
 
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
         var inner = context
-        inner.opacity *= opacity
+        inner.opacity *= min(max(opacity.current()[0], 0), 1)
         node.singleChild?.place(in: rect, proposal: proposal, context: inner, into: &list)
     }
 }
@@ -268,9 +268,10 @@ struct OffsetContent: NodeContent {
 /// `.rotationEffect(_:)` and `.scaleEffect(_:)` — a transform about an anchor
 /// inside the node's own rect, again with no effect on layout.
 struct TransformContent: NodeContent {
+    /// The parameter, animated: radians for a rotation, (x, y) for a scale.
     enum Kind {
-        case rotation(Angle)
-        case scale(x: Double, y: Double)
+        case rotation(AnimatedVector)
+        case scale(AnimatedVector)
     }
 
     let kind: Kind
@@ -279,10 +280,11 @@ struct TransformContent: NodeContent {
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
         let base: Transform
         switch kind {
-        case .rotation(let angle):
-            base = .rotation(angle)
-        case .scale(let x, let y):
-            base = .scale(x: x, y: y)
+        case .rotation(let radians):
+            base = .rotation(.radians(radians.current()[0]))
+        case .scale(let factors):
+            let xy = factors.current()
+            base = .scale(x: xy[0], y: xy[1])
         }
         var inner = context
         inner.transform = context.transform
@@ -298,10 +300,12 @@ struct ClipContent: NodeContent {
     var clipsChildren: Bool { true }
 
     func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
+        // Cut to the frame as shown — mid-animation, the size in between —
+        // while the child is laid out at the layout's own.
         node.singleChild?.place(
             in: rect,
             proposal: proposal,
-            context: context.clipped(to: rect, cornerRadius: cornerRadius),
+            context: context.clipped(to: node.frame, cornerRadius: cornerRadius),
             into: &list
         )
     }

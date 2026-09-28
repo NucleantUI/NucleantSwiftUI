@@ -220,7 +220,3 @@ extension ForEach {
 extension Button {
     public func _isEquivalent(to other: Button<Label>) -> Bool { false }
 }
-
-extension NavigationLink {
-    public func _isEquivalent(to other: NavigationLink<Label, Destination>) -> Bool { false }
-}

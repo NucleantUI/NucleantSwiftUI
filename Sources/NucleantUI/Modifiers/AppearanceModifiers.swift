@@ -54,7 +54,9 @@ extension View {
     }
 
     public func opacity(_ opacity: Double) -> some View {
-        _ModifierView(content: self, key: ["opacity", opacity] as [AnyHashable]) { _ in OpacityContent(opacity: opacity) }
+        _ModifierView(content: self, key: ["opacity", opacity] as [AnyHashable]) { context in
+            OpacityContent(opacity: context.animatedValue(.opacity, [opacity]))
+        }
     }
 
     /// Laid out as usual, drawn not at all.
@@ -68,8 +70,8 @@ extension View {
     }
 
     public func rotationEffect(_ angle: Angle, anchor: UnitPoint = .center) -> some View {
-        _ModifierView(content: self, key: ["rotation", angle, anchor] as [AnyHashable]) { _ in
-            TransformContent(kind: .rotation(angle), anchor: anchor)
+        _ModifierView(content: self, key: ["rotation", angle, anchor] as [AnyHashable]) { context in
+            TransformContent(kind: .rotation(context.animatedValue(.rotation, [angle.radians])), anchor: anchor)
         }
     }
 
@@ -78,8 +80,8 @@ extension View {
     }
 
     public func scaleEffect(x: Double = 1, y: Double = 1, anchor: UnitPoint = .center) -> some View {
-        _ModifierView(content: self, key: ["scale", x, y, anchor] as [AnyHashable]) { _ in
-            TransformContent(kind: .scale(x: x, y: y), anchor: anchor)
+        _ModifierView(content: self, key: ["scale", x, y, anchor] as [AnyHashable]) { context in
+            TransformContent(kind: .scale(context.animatedValue(.scale, [x, y])), anchor: anchor)
         }
     }
 

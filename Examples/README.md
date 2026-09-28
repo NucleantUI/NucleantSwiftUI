@@ -1,6 +1,6 @@
 # Examples
 
-Eight small apps, each a standalone SwiftPM package that depends on
+Ten small apps, each a standalone SwiftPM package that depends on
 NucleantUI from the enclosing checkout (`.package(path: "../..")`).
 Build and run any of them from its own directory:
 
@@ -22,6 +22,8 @@ dependency to
 | [TwentyFortyEight](TwentyFortyEight) | game | a swipe (`DragGesture.onEnded` + `translation`) driving a value-type board, the whole game in one `@State`, arrow buttons for a mouse |
 | [Pomodoro](Pomodoro) | timer | a Foundation `Timer` on the main run loop writing `@State` once a second; an analog clock and a progress ring as `PathShape`s |
 | [Sampler](Sampler) | audio | `@Observable` models as the source of truth (`Sample`, `SampleBank`, an envelope filled in by a background reduction), `@Bindable` faders, a waveform drawn by a `Shader` fed `ShaderArgument` float arrays, vDSP synthesis and `concurrentPerform` min/max reduction, real playback through `AVAudioEngine`, a 60 Hz playhead written to the model from a timer |
+| [Flashcards](Flashcards) | study / animation | every part of the animation API doing a job: a card that follows a `DragGesture` and is sprung back (`withAnimation(.bouncy)`) or flung off with `withAnimation(_:_:completion:)`, whose completion deals the next card; the next card arriving through a one-element `ForEach` so `.transition` applies; a flip as an `Animatable` view that swaps faces halfway; a head-shake `AnimatableModifier` under `.animation(_:value:)`; an animatable `Shape` progress ring; numbers that count through their `animatableData`; a `TimelineView` clock; a results screen sliding in over the deck, its score rolled up by a `CustomAnimation` and its rows staggered with `.delay` |
+| [AnimatableShader](AnimatableShader) | shader / animation | four shaders kept as bundled PyShader `.py` files, three with their clock replaced by a `playhead` `ShaderArgument` and one — a glow — taking its position as a `light` argument; an `Animatable` view with the playhead as its `animatableData`, so `withAnimation` drives the shader — a tap plays it forward and the completion rewinds it, each scene with its own timing (2 s and 2 s; 8 s forward and a 2 s rewind); a `CustomAnimation` rewind that overshoots and bounces into place; the glow following each tap as an `Animatable` point under a `Wiggle` `CustomAnimation` — most of the way at once, then shrinking swings onto the spot; a custom tab bar whose highlight slides over first, the scene following in that animation's completion with a `.push(from:)` transition in the direction the highlight went |
 | [Finder](Finder) | file browser | a Finder list view over an `@Observable` file tree: nested `DisclosureGroup`s built recursively (a folder's content is its children's rows), each bound to `$node.isExpanded` through `@Bindable`; a custom `DisclosureGroupStyle` that stacks label over content so the columns stay aligned while only the name indents; New Folder / Move to Trash editing the tree, and a download growing from a timer, landing in the rows that show them; a `.contextMenu` per row (expand, new folder, duplicate, trash) ending in a row of tag colours that closes the menu through `@Environment(\.contextMenu)`; a sidebar of places with back/forward history |
 
 Things worth knowing that the examples had to work around, since there is no

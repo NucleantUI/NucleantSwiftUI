@@ -48,6 +48,28 @@ extension View {
     }
 }
 
+extension View {
+
+    /// Runs `action` when this view leaves the tree — removed by an `if`, a
+    /// `ForEach` or anything else that stops building it. Once per
+    /// appearance, like `onAppear`, and with the action from the most
+    /// recent build, so it sees the values that build captured.
+    public func onDisappear(perform action: (@MainActor () -> Void)? = nil) -> some View {
+        _ModifierView(content: self) { context in
+            if let action {
+                context.effects.onDisappear(
+                    StateKey(path: context.path, propertyIndex: -1, viewType: ObjectIdentifier(OnDisappearMarker.self)),
+                    action
+                )
+            }
+            return EnvironmentContent(colorScheme: context.environment.colorScheme)
+        }
+    }
+}
+
 /// Stands in for a view type in the `onAppear` key — the modifier has no
 /// view of its own, and the key only needs to be distinct from every real one.
 private enum OnAppearMarker {}
+
+/// The same, for `onDisappear`.
+private enum OnDisappearMarker {}

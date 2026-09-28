@@ -47,17 +47,21 @@ extension ForEach where Data == Range<Int>, ID == Int {
 extension ForEach: BuiltinView {
     func makeNode(_ context: inout BuildContext) -> ViewNode {
         let path = context.path
-        let children = data.map { element in
+        let built = data.map { element in
             // The identity hash, not the ordinal, is the path component — so a
             // row keeps its state when the collection is reordered.
-            context.child(identify(element).hashValue) { ctx in
+            let index = identify(element).hashValue
+            let isNew = context.isNewChild(at: index)
+            let node = context.child(index) { ctx in
                 // The row closure is user code and may read an `@Observable`
                 // model; those reads are the ForEach's, since the closure is
                 // what decides what each row is.
                 let row = trackingObservation(at: path) { build(element) }
                 return buildNode(row, &ctx)
             }
+            return (index: index, node: node, isNew: isNew)
         }
-        return ViewNode(content: GroupContent(), children: children)
+        // Rows added fade (or `.transition`) in; rows removed out.
+        return ViewNode(content: GroupContent(), children: context.structuralChildren(built))
     }
 }

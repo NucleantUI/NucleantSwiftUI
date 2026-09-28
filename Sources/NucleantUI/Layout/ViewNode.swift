@@ -30,6 +30,31 @@ final class ViewNode {
     /// to map a window point into the node's own space.
     var transform: Transform = .identity
 
+    /// The proposal it was last placed under — what a removed node is
+    /// placed under again while it exits.
+    var proposal: ProposedSize = .unspecified
+
+    /// The rect layout last gave it, before any animation moved it — what
+    /// the next layout is compared with. See `NodeMotion.swift`.
+    var layoutRect: Rect?
+
+    /// Its animation in flight: a displacement, an entrance.
+    var motion = NodeMotion()
+
+    /// The `.transition` of the view this node stands for, carried up
+    /// through the modifiers around it to the container that inserts or
+    /// removes it.
+    var transitionTrait: AnyTransition?
+
+    /// Set on a node removed from the tree while its exit plays: it is
+    /// drawn, but neither laid out nor hit.
+    var removal: NodeRemoval?
+
+    /// The path of the view whose build made this node — as opposed to one
+    /// that only handed a child's node on (an `if`, a view's `body`).
+    /// Motion is inherited only by the node's maker.
+    var ownerPath: [Int]?
+
     /// Measurements taken so far, keyed by the proposal that produced them.
     ///
     /// Layout asks the same question repeatedly: a stack measures every child
@@ -84,9 +109,10 @@ final class ViewNode {
     /// `TupleView`, `ForEach`) dissolve into their own children, so a stack
     /// treats a group's contents as its own siblings — SwiftUI's rule.
     var layoutChildren: [ViewNode] {
-        guard children.contains(where: { $0.content.isTransparent }) else { return children }
-        return children.flatMap { child in
-            child.content.isTransparent ? child.layoutChildren : [child]
+        guard children.contains(where: { $0.content.isTransparent || $0.removal != nil }) else { return children }
+        return children.flatMap { child -> [ViewNode] in
+            if child.removal != nil { return [] }
+            return child.content.isTransparent ? child.layoutChildren : [child]
         }
     }
 
@@ -128,9 +154,19 @@ final class ViewNode {
         context: DrawContext,
         into list: inout DisplayList
     ) {
+        let store = AnimationStore.current
+        var rect = rect
+        var context = context
         frame = rect
+        if let store, !context.freezesMotion {
+            (frame, rect) = animate(rect, context: &context, store: store)
+        }
         transform = context.transform
+        self.proposal = proposal
         content.place(node: self, in: rect, proposal: proposal, context: context, into: &list)
+        if let store, store.hasGhosts {
+            placeGhosts(context: context, store: store, into: &list)
+        }
     }
 }
 
@@ -170,6 +206,14 @@ protocol NodeContent {
     /// Told when the pointer moves over or off this node (`.onHover`).
     var hoverTarget: HoverTarget? { get }
 
+    /// The transition this node gives the view it wraps (`.transition`).
+    var transitionTrait: AnyTransition? { get }
+
+    /// Whether this node's frame passes through the sizes in between while
+    /// it animates — true for most; false for text, which would reflow at
+    /// each and so keeps its new size while it moves.
+    var animatesSize: Bool { get }
+
     /// True for a subtree kept in the tree but off screen (`._parked`). Its
     /// nodes still carry the frames from when they were last placed, and hit
     /// testing must not trust them.
@@ -195,6 +239,8 @@ extension NodeContent {
     var dropTarget: DropTarget? { nil }
     var contextMenuSource: ContextMenuSource? { nil }
     var hoverTarget: HoverTarget? { nil }
+    var transitionTrait: AnyTransition? { nil }
+    var animatesSize: Bool { true }
     var isParked: Bool { false }
     var clipsChildren: Bool { false }
 
@@ -269,6 +315,9 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
     // Whether the view standing here already drew into a node of its own;
     // a fresh build of the same view keeps it (see `RenderBoundaryContent`).
     var wasBoundary = false
+    // The node the view standing here last produced, when it is the same
+    // view — the one a fresh build takes its motion over from.
+    var predecessor: ViewNode?
 
     if let candidate = context.records.candidate(at: path) {
         let standing = candidate.entry
@@ -304,8 +353,10 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
         if replaced.identity != identity {
             context.store.release(replaced.stateKeys)
             context.effects.forget(paths: [path])
+            context.animations.forget(paths: [path])
         } else {
             wasBoundary = replaced.isBoundary
+            predecessor = replaced.node
         }
     } else {
         PerfTrace.trace("build \(path) \(V.self) — new")
@@ -324,13 +375,16 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
     var isBoundary = false
     if let builtin = view as? BuiltinView {
         context.viewIdentity = identity
+        context.isReplacingStandingView = predecessor != nil
         node = builtin.makeNode(&context)
     } else {
         // The body's `@Observable` reads belong to this view. Only the body
         // itself is inside the scope — the child it returns is built after,
         // in a scope of its own — so a change rebuilds from here, not from
         // every ancestor that happened to be mid-build.
-        let body = trackingObservation(at: path) { view.body }
+        // An `Animatable` view mid-change shows its in-between value.
+        let shown = context.showing(view)
+        let body = trackingObservation(at: path) { shown.body }
         node = context.child(0) { sub in buildNode(body, &sub) }
         // A user view that a change can originate at draws into a node of
         // its own: it read `@State`, or this very build is the rebuild its
@@ -340,11 +394,17 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
         isBoundary = (wasBoundary || context.isDirty(at: path) || DependencyTracker.shared.hasReads(for: path))
             && !node.content.isTransparent
         if isBoundary {
+            let body = node
             node = ViewNode(
                 content: RenderBoundaryContent(key: RenderNodeKey(path: path, identity: identity)),
-                children: [node]
+                children: [body]
             )
+            node.transitionTrait = body.transitionTrait
         }
+    }
+    if node.ownerPath == nil { node.ownerPath = path }
+    if let predecessor, predecessor !== node, node.ownerPath == path {
+        node.inheritMotion(from: predecessor)
     }
     let reads = DependencyTracker.shared.takeReads(for: path)
 

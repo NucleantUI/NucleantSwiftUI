@@ -12,6 +12,11 @@ struct TextContent: NodeContent {
     let color: Color
     let alignment: TextAlignment
     let lineLimit: Int?
+    /// `color`, animated — a change of foreground color fades across.
+    var animatedColor: AnimatedVector? = nil
+
+    /// Laid out at its final size throughout, never reflowed mid-way.
+    var animatesSize: Bool { false }
 
     func sizeThatFits(_ proposal: ProposedSize, node: ViewNode) -> Size {
         TextMeasurer.size(of: string, font: font, proposal: proposal, lineLimit: lineLimit)
@@ -26,7 +31,7 @@ struct TextContent: NodeContent {
             string: string,
             frame: rect,
             font: font,
-            color: context.resolve(color),
+            color: context.resolve(animatedColor.map { $0.current(of: .color(color)).flatColor } ?? color),
             alignment: alignment,
             lineLimit: lineLimit,
             // Only a single-line label can be ellipsised, and only when it
@@ -54,6 +59,9 @@ struct ShapeContent: NodeContent {
     /// nothing, matching SwiftUI (a `Circle()` in a `VStack` with no width
     /// proposal is empty, not infinite).
     let idealSize: Size?
+    /// `fill` and `stroke`, animated — see `BuildContext.animatedStyle`.
+    var animatedFill: AnimatedVector? = nil
+    var animatedStroke: AnimatedVector? = nil
 
     func sizeThatFits(_ proposal: ProposedSize, node: ViewNode) -> Size {
         proposal.replacingUnspecifiedDimensions(by: idealSize ?? .zero)
@@ -65,8 +73,8 @@ struct ShapeContent: NodeContent {
         list.append(.shape(ShapeDraw(
             path: makePath(rect),
             bounds: rect,
-            fill: fill.map(context.resolve),
-            stroke: stroke.map(context.resolve),
+            fill: fill.map { context.resolve(animatedFill?.current(of: $0) ?? $0) },
+            stroke: stroke.map { context.resolve(animatedStroke?.current(of: $0) ?? $0) },
             strokeStyle: strokeStyle,
             transform: context.transform,
             clip: context.clip,

@@ -25,8 +25,8 @@ public struct _ViewModifier_Content<Modifier: ViewModifier>: View {
 
 /// A view combined with a modifier.
 public struct ModifiedContent<Content: View, Modifier: ViewModifier>: View {
-    public let content: Content
-    public let modifier: Modifier
+    public var content: Content
+    public var modifier: Modifier
 
     public init(content: Content, modifier: Modifier) {
         self.content = content

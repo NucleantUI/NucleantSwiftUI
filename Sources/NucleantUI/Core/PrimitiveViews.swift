@@ -58,10 +58,12 @@ public struct _ViewArray<Content: View>: View {
 
 extension _ViewArray: BuiltinView {
     func makeNode(_ context: inout BuildContext) -> ViewNode {
-        let children = elements.enumerated().map { index, element in
-            context.child(index) { ctx in buildNode(element, &ctx) }
+        let built = elements.enumerated().map { index, element in
+            let isNew = context.isNewChild(at: index)
+            let node = context.child(index) { ctx in buildNode(element, &ctx) }
+            return (index: index, node: node, isNew: isNew)
         }
-        return ViewNode(content: GroupContent(), children: children)
+        return ViewNode(content: GroupContent(), children: context.structuralChildren(built))
     }
 }
 
@@ -86,12 +88,25 @@ extension _ConditionalContent: BuiltinView {
     func makeNode(_ context: inout BuildContext) -> ViewNode {
         // Each branch gets its own path slot, so flipping the condition
         // discards the other branch's `@State` instead of aliasing onto it.
+        let index: Int
+        let node: ViewNode
+        let isNew: Bool
         switch storage {
         case .trueContent(let content):
-            return context.child(0) { ctx in buildNode(content, &ctx) }
+            index = 0
+            isNew = context.isNewChild(at: 0)
+            node = context.child(0) { ctx in buildNode(content, &ctx) }
         case .falseContent(let content):
-            return context.child(1) { ctx in buildNode(content, &ctx) }
+            index = 1
+            isNew = context.isNewChild(at: 1)
+            node = context.child(1) { ctx in buildNode(content, &ctx) }
         }
+        // The branch's node stands for this view as long as nothing is
+        // exiting beside it; while the other branch transitions out, the
+        // two share a group.
+        let children = context.structuralChildren([(index, node, isNew)])
+        guard children.count > 1 else { return node }
+        return ViewNode(content: GroupContent(), children: children)
     }
 }
 
@@ -105,9 +120,14 @@ extension Optional: BuiltinView where Wrapped: View {
     func makeNode(_ context: inout BuildContext) -> ViewNode {
         switch self {
         case .some(let wrapped):
-            return context.child(0) { ctx in buildNode(wrapped, &ctx) }
+            let isNew = context.isNewChild(at: 0)
+            let node = context.child(0) { ctx in buildNode(wrapped, &ctx) }
+            // One slot: a view back in it replaces whatever was exiting
+            // from it, so the result is only ever `node`.
+            _ = context.structuralChildren([(0, node, isNew)])
+            return node
         case .none:
-            return ViewNode(content: GroupContent(), children: [])
+            return ViewNode(content: GroupContent(), children: context.structuralChildren([]))
         }
     }
 }

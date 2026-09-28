@@ -36,6 +36,11 @@ public struct RoundedRectangle: Shape {
         self._viewID = _viewID
     }
 
+    public var animatableData: Double {
+        get { cornerRadius }
+        set { cornerRadius = newValue }
+    }
+
     public func path(in rect: Rect) -> Path {
         var path = Path()
         // Clamp: ThorVG draws a radius larger than half the shorter side as an

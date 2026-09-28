@@ -24,7 +24,8 @@ extension Color: BuiltinView {
             fill: .color(color),
             stroke: nil,
             strokeStyle: StrokeStyle(),
-            idealSize: nil
+            idealSize: nil,
+            animatedFill: context.animatedStyle(.fill, .color(color))
         ))
     }
 }

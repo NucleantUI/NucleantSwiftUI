@@ -93,12 +93,14 @@ extension Text: BuiltinView {
         if let explicitWeight { font.weight = explicitWeight }
         if isItalic { font.isItalic = true }
 
+        let color = explicitColor ?? context.environment.foregroundColor
         return ViewNode(content: TextContent(
             string: content,
             font: font,
-            color: explicitColor ?? context.environment.foregroundColor,
+            color: color,
             alignment: alignment ?? context.environment.multilineTextAlignment,
-            lineLimit: explicitLineLimit ?? context.environment.lineLimit
+            lineLimit: explicitLineLimit ?? context.environment.lineLimit,
+            animatedColor: context.animatedValue(.textColor, color.animatableVector)
         ))
     }
 }

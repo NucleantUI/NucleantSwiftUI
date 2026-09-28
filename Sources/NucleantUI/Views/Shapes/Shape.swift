@@ -8,15 +8,21 @@
 /// Unlike SwiftUI's, `path(in:)` returns a path in *absolute* coordinates —
 /// the rect passed in is where the shape was placed, so building straight into
 /// it saves a translate per shape.
+///
+/// Every shape is `Animatable`: one that exposes `animatableData` is drawn
+/// at each value in between when a change to it animates — its path is
+/// made again every frame, nothing is rebuilt.
 @MainActor
-public protocol Shape: View {
+public protocol Shape: Animatable, View {
     func path(in rect: Rect) -> Path
 }
 
 /// A shape used directly as a view fills with the current foreground color,
 /// the same default SwiftUI applies.
-extension Shape where Body == Never {
-    public var body: Never { bodyUnavailable() }
+extension Shape {
+    public var body: _ShapeView<Self> {
+        _ShapeView(shape: self, fill: nil, stroke: nil, strokeStyle: StrokeStyle(), fillsWithForeground: true)
+    }
 }
 
 extension Shape {
@@ -48,42 +54,41 @@ extension Shape {
     }
 }
 
-/// A shape with its paint resolved. Every `Shape` becomes one of these — used
-/// bare, the shape's own `makeNode` wraps itself in one with the environment's
-/// foreground color.
+/// A shape with its paint resolved. Every `Shape` becomes one of these —
+/// used bare, through its `body`, filled with the environment's foreground
+/// color.
 @View
 public struct _ShapeView<S: Shape>: View {
     let shape: S
     let fill: ShapeStyle?
     let stroke: ShapeStyle?
     let strokeStyle: StrokeStyle
+    /// Fill with the foreground color in effect, rather than `fill`.
+    var fillsWithForeground: Bool = false
 
     public var body: Never { bodyUnavailable() }
 }
 
 extension _ShapeView: BuiltinView {
     func makeNode(_ context: inout BuildContext) -> ViewNode {
-        let shape = self.shape
+        let drawn = context.drawnShape(shape)
+        let fill = fillsWithForeground ? .color(context.environment.foregroundColor) : self.fill
         return ViewNode(content: ShapeContent(
-            makePath: { rect in shape.path(in: rect) },
+            makePath: { rect in drawn().path(in: rect) },
             fill: fill,
             stroke: stroke,
             strokeStyle: strokeStyle,
-            idealSize: nil
+            idealSize: nil,
+            animatedFill: context.animatedStyle(.fill, fill),
+            animatedStroke: context.animatedStyle(.stroke, stroke)
         ))
     }
 }
 
-/// Using a shape directly as a view: filled with the foreground color.
+/// The built-in shapes, which are nodes themselves rather than a body.
 extension Shape {
     func makeShapeNode(_ context: inout BuildContext) -> ViewNode {
-        let shape = self
-        return ViewNode(content: ShapeContent(
-            makePath: { rect in shape.path(in: rect) },
-            fill: .color(context.environment.foregroundColor),
-            stroke: nil,
-            strokeStyle: StrokeStyle(),
-            idealSize: nil
-        ))
+        _ShapeView(shape: self, fill: nil, stroke: nil, strokeStyle: StrokeStyle(), fillsWithForeground: true)
+            .makeNode(&context)
     }
 }

@@ -178,26 +178,47 @@ public final class Invalidator {
     private(set) var dirtyPaths: Set<[Int]> = []
     private(set) var needsFullRebuild = false
 
+    /// The transaction the writes since the last frame were made in —
+    /// `withAnimation`'s, most often. `nil` when none was.
+    private var transaction: Transaction?
+
     private init() {}
 
     /// Invalidate the subtree rooted at the view that owns the written state.
     func invalidate(owner path: [Int]) {
         dirtyPaths.insert(path)
+        noteTransaction()
+    }
+
+    /// File the transaction the running code is in, if any, with the frame
+    /// that will serve this write.
+    private func noteTransaction() {
+        guard let current = TransactionScope.current else { return }
+        for completion in current.completions {
+            completion.isClaimed = true
+        }
+        if transaction == nil {
+            transaction = current
+        } else {
+            transaction?.merge(current)
+        }
     }
 
     /// Invalidate everything — a resize, or an explicit host-level request.
     public func invalidate() {
         needsFullRebuild = true
+        noteTransaction()
     }
 
     var isDirty: Bool { needsFullRebuild || !dirtyPaths.isEmpty }
 
     /// Take the accumulated work and clear it.
-    func consume() -> (full: Bool, paths: Set<[Int]>) {
+    func consume() -> (full: Bool, paths: Set<[Int]>, transaction: Transaction?) {
         defer {
             needsFullRebuild = false
             dirtyPaths.removeAll(keepingCapacity: true)
+            transaction = nil
         }
-        return (needsFullRebuild, dirtyPaths)
+        return (needsFullRebuild, dirtyPaths, transaction)
     }
 }
