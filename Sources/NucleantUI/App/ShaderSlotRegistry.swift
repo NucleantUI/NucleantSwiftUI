@@ -166,6 +166,8 @@ final class ShaderSlotRegistry {
     let renderNodes: RenderNodeManager
     let painter: NodePainter
     let boundaries: RenderBoundaries
+    /// The `TextureView` nodes, whose pixels their sources write.
+    let textures: TextureNodeManager
 
     /// Keyed by the view's structural path — the same identity `@State` uses,
     /// so a shader keeps its pipeline across rebuilds and loses it only when
@@ -188,6 +190,7 @@ final class ShaderSlotRegistry {
         self.renderNodes = RenderNodeManager(engine: engine)
         self.painter = NodePainter(engine: engine, nodes: renderNodes)
         self.boundaries = RenderBoundaries(nodes: renderNodes, painter: painter)
+        self.textures = TextureNodeManager(engine: engine, renderNodes: renderNodes)
     }
 
     // MARK: - Layout-pass lifecycle
@@ -198,6 +201,7 @@ final class ShaderSlotRegistry {
         for slot in slots.values { slot.used = false }
         renderNodes.beginPass(windowSize: windowSize)
         boundaries.beginPass()
+        textures.beginPass()
     }
 
     /// Called from `ShaderContent.place`: make sure a slot exists for this
@@ -422,6 +426,7 @@ final class ShaderSlotRegistry {
         // Retire the per-view nodes no view pulled, paint the images with
         // new content, then put the engine's list in this pass's paint
         // order — slots included.
+        textures.endPass()
         renderNodes.retireUnused()
         boundaries.endPass()
         painter.paintPending()
@@ -455,6 +460,7 @@ final class ShaderSlotRegistry {
     func tick(_ delta: Double, pointer: Point) -> Bool {
         releasePending()
         renderNodes.releasePending()
+        textures.releasePending()
         painter.frameWillDraw()
         guard !slots.isEmpty else { return false }
         for slot in slots.values {
@@ -494,6 +500,7 @@ final class ShaderSlotRegistry {
         slots.removeAll()
         releasePending()
         painter.destroy()
+        textures.destroyAll()
         renderNodes.destroyAll()
     }
 

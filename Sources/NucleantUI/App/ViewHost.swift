@@ -126,6 +126,14 @@ public final class ViewHost {
     /// usually rebuilt it.
     private var hovered: Hit<HoverTarget>?
 
+    /// The `TextureView` the pointer is over, while no button is down — told
+    /// every move, and told when the pointer leaves it.
+    private var textureHovered: Hit<TextureInputTarget>?
+
+    /// The view keys go to — a `TextField`, a `TextureView` — known by its
+    /// path: the last one pressed. A press anywhere else takes the keys away.
+    private var focusedPath: [Int]?
+
     /// The frame of the control most recently released — where a `Menu`
     /// pressed as a button opens its items.
     private var lastReleasedFrame: Rect?
@@ -435,6 +443,7 @@ public final class ViewHost {
         if primaryPointer == nil {
             primaryPointer = id
             pointerLocation = point
+            updateFocus(at: point)
             touchStart = point
             isScrolling = false
             pressSerial += 1
@@ -542,6 +551,7 @@ public final class ViewHost {
         if primaryPointer == nil, gestures.isEmpty {
             pointerLocation = point
             updateHover(at: point)
+            updateTextureHover(at: point)
             return
         }
         if primaryPointer == nil || primaryPointer == id {
@@ -669,6 +679,69 @@ public final class ViewHost {
         hovered?.value.action(false)
         hovered = found
         found?.value.action(true)
+    }
+
+    /// Tell the `TextureView` under `point` where the pointer is, and the
+    /// one it was over, if another, that it left.
+    private func updateTextureHover(at point: Point) {
+        let found = rootNode?.hitTest(point) { $0.content.textureInput }
+        if let previous = textureHovered, previous.value.path != found?.value.path {
+            previous.value.send(.pointerExited)
+        }
+        textureHovered = found
+        if let found {
+            found.value.send(.pointerMoved(found.localPoint))
+        }
+    }
+
+    /// A press at `point`: the view under it that takes keys, if any, gets
+    /// them; the one that had them is told it lost them.
+    private func updateFocus(at point: Point) {
+        let found = rootNode?.hitTest(point) { node in
+            node.content.focusTarget.flatMap { $0.isEnabled ? $0 : nil }
+        }?.value
+        guard found?.path != focusedPath else { return }
+        if let path = focusedPath {
+            rootNode?.focusTarget(at: path)?.onFocusChange(false)
+        }
+        focusedPath = found?.path
+        found?.onFocusChange(true)
+    }
+
+    /// The focused view's current target — `nil`, and the focus dropped,
+    /// once that view has left the tree.
+    private func focusedTarget() -> FocusTarget? {
+        guard let path = focusedPath else { return nil }
+        guard let target = rootNode?.focusTarget(at: path) else {
+            focusedPath = nil
+            return nil
+        }
+        return target
+    }
+
+    // MARK: - Keys
+
+    /// A key pressed, for the view that has the keys.
+    public func keyDown(keyCode: UInt16, characters: String?, modifiers: EventModifiers = []) {
+        focusedTarget()?.onKeyDown(KeyEvent(keyCode: keyCode, characters: characters, modifiers: modifiers))
+    }
+
+    public func keyUp(keyCode: UInt16, characters: String?, modifiers: EventModifiers = []) {
+        focusedTarget()?.onKeyUp(KeyEvent(keyCode: keyCode, characters: characters, modifiers: modifiers))
+    }
+
+    // MARK: - Editing commands
+
+    /// Whether the view that has the keys takes `command` — what decides if
+    /// the Edit menu's item for it is enabled.
+    func canPerform(_ command: EditCommand) -> Bool {
+        focusedTarget()?.editCommands.contains(command) ?? false
+    }
+
+    /// `command` from the Edit menu, for the view that has the keys.
+    func perform(_ command: EditCommand) {
+        guard let target = focusedTarget(), target.editCommands.contains(command) else { return }
+        target.onEditCommand(command)
     }
 
     // MARK: - Context menus

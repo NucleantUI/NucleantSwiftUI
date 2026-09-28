@@ -206,6 +206,12 @@ protocol NodeContent {
     /// Told when the pointer moves over or off this node (`.onHover`).
     var hoverTarget: HoverTarget? { get }
 
+    /// Hover moves for a `TextureView`, which passes them on to its source.
+    var textureInput: TextureInputTarget? { get }
+
+    /// Takes the keys once pressed — a `TextField`, a `TextureView`.
+    var focusTarget: FocusTarget? { get }
+
     /// The transition this node gives the view it wraps (`.transition`).
     var transitionTrait: AnyTransition? { get }
 
@@ -239,6 +245,8 @@ extension NodeContent {
     var dropTarget: DropTarget? { nil }
     var contextMenuSource: ContextMenuSource? { nil }
     var hoverTarget: HoverTarget? { nil }
+    var textureInput: TextureInputTarget? { nil }
+    var focusTarget: FocusTarget? { nil }
     var transitionTrait: AnyTransition? { nil }
     var animatesSize: Bool { true }
     var isParked: Bool { false }

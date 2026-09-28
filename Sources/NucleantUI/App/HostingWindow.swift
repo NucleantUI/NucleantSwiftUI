@@ -58,6 +58,11 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     var platformWindow: PlatformWindow<HostingWindow>?
     #endif
 
+    #if os(macOS)
+    /// Held here: an `NSResponder`'s `nextResponder` link is unretained.
+    private var editCommandResponder: EditCommandResponder?
+    #endif
+
     private var thorNode: ThorShaderNode<NucleantRenderNode>?
 
     /// GPU slots for `Shader` views — one per live shader, composited into the
@@ -189,6 +194,12 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         platformWindow.center()
         platformWindow.makeKeyAndOrderFront(nil)
         platformWindow.makeFirstResponder(platformWindow.contentView)
+        // The Edit menu's actions, for the view in the tree that has the keys.
+        if let contentView = platformWindow.contentView {
+            let responder = EditCommandResponder(host: host)
+            responder.insert(after: contentView)
+            editCommandResponder = responder
+        }
 
         // 6. Seed the size. AppKit posts `windowDidResize` only for actual
         //    resizes, so without this the tree never learns how big it is.
@@ -598,8 +609,38 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         MainActor.assumeIsolated { host.scroll(dx: dx, dy: dy) }
     }
 
-    public func on_key_down(keyCode: UInt16, characters: String?) {}
-    public func on_key_up(keyCode: UInt16, characters: String?) {}
+    public func on_key_down(keyCode: UInt16, characters: String?) {
+        MainActor.assumeIsolated {
+            host.keyDown(keyCode: keyCode, characters: characters, modifiers: Self.currentModifiers)
+        }
+    }
+
+    public func on_key_up(keyCode: UInt16, characters: String?) {
+        MainActor.assumeIsolated {
+            host.keyUp(keyCode: keyCode, characters: characters, modifiers: Self.currentModifiers)
+        }
+    }
+
+    /// The modifier keys of the key event being delivered. The platform's
+    /// key callbacks carry no modifiers, but they run while AppKit is
+    /// dispatching that event — so it is `NSApp.currentEvent`, when that is a
+    /// key event, and otherwise the keyboard's live state.
+    private static var currentModifiers: EventModifiers {
+        #if os(macOS)
+        let current = NSApp.currentEvent
+        let flags = current.map { [.keyDown, .keyUp].contains($0.type) } == true
+            ? current!.modifierFlags
+            : NSEvent.modifierFlags
+        var modifiers: EventModifiers = []
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        if flags.contains(.control) { modifiers.insert(.control) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.command) { modifiers.insert(.command) }
+        return modifiers
+        #else
+        return []
+        #endif
+    }
 
     public func on_touch_down(id: Int, x: Double, y: Double) {
         MainActor.assumeIsolated { host.pointerDown(id: id, at: viewPoint(x: x, y: y)) }

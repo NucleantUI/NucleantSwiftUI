@@ -30,6 +30,10 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         /// out of the shared painter canvas (`RenderNodeManager`) and
         /// composited into the view's rect.
         case image(ImageNode<NucleantRenderNode>)
+        /// One `TextureView`'s image, written from outside the view tree by
+        /// its `TextureSource` (a browser's compositor, a video decoder) and
+        /// composited into the view's rect.
+        case externalTexture(ExternalTextureNode<NucleantRenderNode>)
     }
 
     public let id: Int
@@ -75,6 +79,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
             observe(node)
         case .image(let node):
             observe(node)
+        case .externalTexture(let node):
+            observe(node)
         }
     }
 
@@ -88,6 +94,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         case .vertexShader(let node):
             node.update(engine, slot: self, cmd: cmd)
         case .image(let node):
+            node.update(engine, slot: self, cmd: cmd)
+        case .externalTexture(let node):
             node.update(engine, slot: self, cmd: cmd)
         }
         // Cleared here, so an idle frame costs nothing: `canvas.draw()` +
@@ -113,6 +121,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
             node.destroyResources(engine)
         case .image(let node):
             node.destroyResources(engine)
+        case .externalTexture(let node):
+            node.destroyResources(engine)
         }
     }
 
@@ -127,6 +137,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
             return node.imageView
         case .image(let node):
             return node.imageView
+        case .externalTexture(let node):
+            return node.imageView
         }
     }
 
@@ -138,7 +150,7 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         switch context {
         case .thor(let node) where compositesToWindow && compositeRect == nil:
             engine.resizeThorNode(node, id: id, width: width, height: height)
-        case .thor, .shader, .vertexShader, .image:
+        case .thor, .shader, .vertexShader, .image, .externalTexture:
             break
         }
     }
