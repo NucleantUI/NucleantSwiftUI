@@ -87,6 +87,7 @@ let package = Package(
     ],
     products: [
         .library(name: "NucleantUI", targets: ["NucleantUI"]),
+        .library(name: "NucleantAudio", targets: ["NucleantAudio"]),
         .executable(name: "NucleantUIDemo", targets: ["NucleantUIDemo"]),
         .executable(name: "ExperimentalUITests", targets: ["ExperimentalUITests"]),
     ],
@@ -124,6 +125,11 @@ let package = Package(
             // what fonts the OS happens to ship — see FontRegistry.
             resources: [.copy("Resources/Fonts")]
         ),
+        // Audio file loading and playback. Stands on its own — no NucleantUI
+        // dependency — so an app, or NucleantDSP later, can use it without the
+        // UI. One shared API; each platform's implementation lives in its own
+        // `+<Platform>.swift` file.
+        .target(name: "NucleantAudio"),
         .executableTarget(
             name: "NucleantUIDemo",
             dependencies: ["NucleantUI"]

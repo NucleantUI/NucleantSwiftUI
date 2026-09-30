@@ -6,14 +6,14 @@ import PackageDescription
 // enclosing checkout; in your own project replace the path dependency with
 //   .package(url: "https://github.com/NucleantUI/NucleantUI.git", branch: "master")
 let package = Package(
-    name: "Sampler",
+    name: "Metronome",
     platforms: [.macOS(.v14), .iOS(.v17)],
     dependencies: [
         .package(path: "../.."),
     ],
     targets: [
         .executableTarget(
-            name: "Sampler",
+            name: "Metronome",
             dependencies: [
                 .product(name: "NucleantUI", package: "NucleantUI"),
                 .product(name: "NucleantAudio", package: "NucleantUI"),

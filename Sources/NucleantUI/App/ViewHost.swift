@@ -721,9 +721,41 @@ public final class ViewHost {
 
     // MARK: - Keys
 
-    /// A key pressed, for the view that has the keys.
+    /// A key pressed, for the view that has the keys — or, for Tab, a move
+    /// to the next tab stop when the focused view doesn't keep Tab itself.
     public func keyDown(keyCode: UInt16, characters: String?, modifiers: EventModifiers = []) {
-        focusedTarget()?.onKeyDown(KeyEvent(keyCode: keyCode, characters: characters, modifiers: modifiers))
+        let focused = focusedTarget()
+        if keyCode == 0x30, !modifiers.contains(.command), !modifiers.contains(.option) {
+            // Nothing focused, a tab stop that passes Tab on, or ⌃Tab out of
+            // one that keeps it. A view that is no tab stop (a `TextureView`)
+            // gets its Tab.
+            let moves = focused.map { $0.isTabStop && (!$0.insertsTab || modifiers.contains(.control)) } ?? true
+            if moves, moveFocus(backward: modifiers.contains(.shift)) { return }
+        }
+        focused?.onKeyDown(KeyEvent(keyCode: keyCode, characters: characters, modifiers: modifiers))
+    }
+
+    /// Give the keys to the tab stop after the focused one (before it, going
+    /// backward), wrapping around; whether there was one to go to.
+    private func moveFocus(backward: Bool) -> Bool {
+        var stops: [FocusTarget] = []
+        rootNode?.tabStops(into: &stops)
+        guard !stops.isEmpty else { return false }
+        let current = focusedPath.flatMap { path in stops.firstIndex { $0.path == path } }
+        let next: Int
+        if let current {
+            next = (current + (backward ? stops.count - 1 : 1)) % stops.count
+        } else {
+            next = backward ? stops.count - 1 : 0
+        }
+        let target = stops[next]
+        guard target.path != focusedPath else { return true }
+        if let path = focusedPath {
+            rootNode?.focusTarget(at: path)?.onFocusChange(false)
+        }
+        focusedPath = target.path
+        target.onFocusChange(true)
+        return true
     }
 
     public func keyUp(keyCode: UInt16, characters: String?, modifiers: EventModifiers = []) {

@@ -71,11 +71,11 @@
 - [ ] .buttonStyle
 - [x] Menu
 - [x] DisclosureGroup / DisclosureGroupStyle
-- [ ] Toggle
-- [ ] Slider
-- [ ] Stepper
-- [ ] Picker
-- [ ] TextField / SecureField / TextEditor
+- [x] Toggle
+- [x] Slider
+- [x] Stepper
+- [x] Picker
+- [x] TextField / SecureField / TextEditor
 - [ ] DatePicker / ColorPicker
 - [ ] ProgressView / Gauge
 - [ ] Link

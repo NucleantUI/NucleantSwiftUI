@@ -59,4 +59,53 @@ extension View {
     public func lineLimit(_ limit: Int?) -> some View {
         environment(\.lineLimit, limit)
     }
+
+    /// At most `limit` lines — and, with `reservesSpace`, room for all of
+    /// them even when fewer are used. The room is kept by a vertical
+    /// `TextField`; a `Text` takes only the upper limit.
+    public func lineLimit(_ limit: Int, reservesSpace: Bool) -> some View {
+        lineLimits(lower: reservesSpace ? limit : 0, upper: limit)
+    }
+
+    /// Between `limit.lowerBound` and `limit.upperBound` lines. A vertical
+    /// `TextField` keeps room for the lower bound and grows to the upper,
+    /// then scrolls; a `Text` takes only the upper limit.
+    public func lineLimit(_ limit: ClosedRange<Int>) -> some View {
+        lineLimits(lower: limit.lowerBound, upper: limit.upperBound)
+    }
+
+    /// At least `limit.lowerBound` lines, with no upper limit.
+    public func lineLimit(_ limit: PartialRangeFrom<Int>) -> some View {
+        lineLimits(lower: limit.lowerBound, upper: nil)
+    }
+
+    /// At most `limit.upperBound` lines.
+    public func lineLimit(_ limit: PartialRangeThrough<Int>) -> some View {
+        lineLimits(lower: 0, upper: limit.upperBound)
+    }
+
+    private func lineLimits(lower: Int, upper: Int?) -> some View {
+        _ModifierView(
+            content: self,
+            key: ["lineLimits", lower, upper] as [AnyHashable],
+            environment: { values in
+                values.lineLimit = upper
+                values.reservedLineCount = lower
+            },
+            node: { context in EnvironmentContent(colorScheme: context.environment.colorScheme) }
+        )
+    }
+}
+
+private struct ReservedLineCountKey: EnvironmentKey {
+    static let defaultValue = 0
+}
+
+extension EnvironmentValues {
+    /// The lines a vertical text field keeps room for however few it uses —
+    /// the lower end of `.lineLimit(2...5)`, or `.lineLimit(3, reservesSpace: true)`.
+    var reservedLineCount: Int {
+        get { self[ReservedLineCountKey.self] }
+        set { self[ReservedLineCountKey.self] = newValue }
+    }
 }

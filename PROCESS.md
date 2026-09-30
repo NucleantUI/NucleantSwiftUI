@@ -1819,3 +1819,127 @@ Also found on the way: `.build/x86_64-apple-macosx/debug` held modules from
 Swift 6.3.1, which the 6.3.3 compiler refuses to import
 (`SwiftCompilerPlugin.swiftmodule`, in the macro target). Deleting that
 directory was all it took.
+
+## 30. TextField, SecureField, TextEditor
+
+`research/SwiftUI-api` gave the surface. The first cut of `TextField`
+(`(_:text:)`, `.onSubmit`, key focus) grew into the whole of it.
+
+**TextField** has every text initializer: title or label, `prompt:`,
+`axis:`, `selection: Binding<TextSelection?>`, and the older
+`onEditingChanged:` / `onCommit:` ones. It also has the value ones:
+`value:format:` (a `ParseableFormatStyle`, optional or not) and
+`value:formatter:` (a `Formatter`). There is no `LocalizedStringKey`, so
+each title init comes in a `String` and a `StringProtocol` form, as
+`DisclosureGroup`'s do. What the field edits is a `TextFieldSource`: a
+`Binding<String>`, or a `TextFieldValue`. `TextFieldValue` is an abstract
+class with a generic subclass per kind (`FormatStyleValue<F>`,
+`OptionalFormatStyleValue<F>`, `FormatterValue<V>`), so the value keeps its
+type without `any` and without `TextField` being generic over it. The
+subclass compares the binding by source and the format by `==` (the
+formatter by identity).
+
+A value field follows SwiftUI's docs. While it has the keys it shows a
+draft; each edit writes the value when the text parses. Otherwise the
+value is left alone, or set to `nil` for an optional binding. Return, or
+losing the keys, formats the text again from the value. Foundation's
+integer parsing is lenient, so "12q" parses as 12.
+
+Other additions to the field:
+
+* Undo and redo come from `TextUndoHistory`, held in `@State`. Runs of
+  typing and of deleting coalesce into one step each. Moving the caret,
+  another kind of edit, or losing the keys ends the step. If the text is
+  changed from outside, the history is dropped instead of being replayed
+  over the change. Undo is in the Edit menu only while there is a step to
+  undo: `editCommands` is worked out on each build.
+* A double press selects a word, and a triple press selects the whole
+  text. A press here carries no click count, so `TextClickCounter` counts
+  presses close together in time (`NSEvent.doubleClickInterval`) and
+  place. A drag after a double press extends by words.
+* Tab and ⇧Tab move the keys between the views whose `FocusTarget` is a
+  tab stop, in layout order (`ViewNode.tabStops`), wrapping around.
+  Tabbing into a single-line field selects its text. A `TextureView` is no
+  tab stop, and gets its Tab as before. A text editor is a stop that keeps
+  Tab (`insertsTab`); ⌃Tab leaves it.
+* `.textFieldStyle(_:)` offers `.automatic` (here, `.roundedBorder`),
+  `.roundedBorder`, `.squareBorder` and `.plain`. SwiftUI's
+  `TextFieldStyle` has only an underscored requirement (`_body`), and this
+  one likewise has only `_decoration`. The environment holds that plain
+  enum, so no style box is needed. `TextFieldChrome` draws the placeholder
+  (the prompt, else the label) and the style's background and border for
+  `TextField` and `SecureField`. `.plain` also drops the text inset, which
+  is why `TextFieldLine.inset` became a property.
+
+`TextField(axis: .vertical)` wraps its text and grows one line at a time.
+It is kept between the lower and upper ends of the `lineLimit` in its
+environment, and past that it scrolls. `.lineLimit(_:reservesSpace:)`,
+`.lineLimit(ClosedRange)`, `(PartialRangeFrom)` and `(PartialRangeThrough)`
+were added for this: the upper end goes into `lineLimit` and the lower
+into `reservedLineCount`. Return submits, and ⌥Return or ⌃Return starts a
+new line.
+
+**SecureField** has its own view and its own key handling. It draws
+through `TextFieldLine`, given one "•" per character. It takes paste and
+select all, but not copy, cut or undo, and it keeps no history of the
+secret. ⌥-arrows, ⌥-delete and a double press go to the ends instead of
+word boundaries, which would give the text's shape away.
+
+**TextEditor** has `init(text:)` and `init(text:selection:)`, plus
+`TextEditorStyle` with `.automatic` (secondary background, hairline
+border) and `.plain` (nothing, no inset), and `.textEditorStyle(_:)`. The
+style layer is `DisclosureGroup`'s: `_StyledTextEditor` picks the style at
+build time from a `TextEditorStyleBox`. As in SwiftUI, the configuration
+has no public members. The framework's styles place the editing area
+through an internal `editor(inset:)`.
+
+The multi-line editing lives in `MultilineTextArea` (MultilineTextEditing.swift),
+which both the editor and the vertical field use. `TextAreaLayout.layOut`
+wraps each paragraph after the last space that fits. It breaks mid-word
+only for a word wider than the line, and lets spaces hang past the edge.
+It records the x of every character boundary per line, which is what the
+caret, selection, hit testing and ↑/↓ read. Tabs advance to stops four
+spaces apart. Each run between tabs is drawn as its own `TextDraw`, so
+ThorVG never has to lay out a tab. The caret keeps a goal column across
+↑/↓. ⌘←/→ go to the ends of the visual line, ⌥↑/↓ by paragraph, ⌘↑/↓ to
+the ends of the text, and page up/down by a screenful. The area scrolls
+to show the caret only when the caret or the text moved since it was last
+placed, so the wheel's offset stays put. It takes the wheel only while
+its text overflows (`hitTarget` is computed, so this follows the last
+placement), and leaves it to an enclosing scroll view otherwise.
+
+`TextSelection` is SwiftUI's single-range form. `multiSelection(RangeSet)`
+is left out because `RangeSet` needs macOS 15, and this package targets
+14. A bound selection is two-way. The field's caret and anchor follow the
+binding, and when the binding's range matches the field's own, the
+field's direction is kept.
+
+Verified headless, in a scratch package driving `ViewHost` over a form
+bound to an `@Observable` model. 43 checks passed:
+
+* typing, word motion, undo/redo runs and a double press in a field;
+* Tab order and wrap-around, select-all on Tab-in, and ⇧Tab;
+* a secure field that won't copy but pastes;
+* value fields, format and formatter, optional going to `nil`;
+* `.onSubmit`, and in the vertical field ⌥Return and Return;
+* in the editor: line breaks, Tab, ↑ keeping the column, ⇧↓, ⌘A, ⌘Z, a
+  selection set from outside, wrapping, the wheel, drag-selection and a
+  triple press.
+
+The layout trace showed the bullets, wrapped lines of five words in a
+300pt editor, and the vertical field at exactly two lines.
+
+Honest limits:
+
+* Keys come in as `keyDown` characters. There is no `NSTextInputClient`,
+  so marked text (dead keys, input methods) doesn't compose.
+* The caret doesn't blink, and there is no I-beam cursor.
+* The pasteboard is macOS-only, as before.
+* A `Text` takes only the upper end of the new `lineLimit` ranges; it
+  doesn't reserve space.
+* A plain `.lineLimit(n)` set inside a range one leaves the range's lower
+  end in effect.
+* `.submitLabel`, `.textContentType`, `.autocorrectionDisabled` and the
+  other keyboard-trait modifiers aren't here.
+* `@FocusState` / `.focused` is its own checklist item.
+* The `Formatter` path is built and checked on macOS only.
