@@ -26,6 +26,14 @@ CATALOG="$ROOT/Sources/NucleantUI/NucleantUI.docc"
 GRAPHS="$ROOT/.build/symbol-graphs"
 MODULE_GRAPHS="$ROOT/.build/symbol-graphs-NucleantUI"
 
+# SWIFT_TOOLCHAIN set (as CI does) builds with that swiftly toolchain rather
+# than Xcode's: an older SwiftPM cannot map the iOS-only binary targets of
+# NucleantThorVG and NucleantVulkan on a Mac.
+if [ -n "${SWIFT_TOOLCHAIN:-}" ] && [ -x "$HOME/.swiftly/bin/swiftly" ]; then
+    swift() { "$HOME/.swiftly/bin/swiftly" run swift "$@" "+$SWIFT_TOOLCHAIN"; }
+fi
+swift --version
+
 # 1. NucleantUI's symbol graph. The flags reach every module the build
 #    compiles, so only NucleantUI's own graphs are kept for DocC.
 echo "Extracting NucleantUI's symbols…"
