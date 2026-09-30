@@ -1,0 +1,23 @@
+@Tutorial(time: 45) {
+    @Intro(title: "Build a drum sampler") {
+        Observable models, bindable faders, a waveform drawn by a shader fed float arrays, and real playback through the audio player.
+
+        The walkthrough for this app is still being written. The finished app is
+        in the repository's `Examples/Sampler` folder, ready to build and read.
+    }
+
+    @Section(title: "Set up the package") {
+        @ContentAndMedia {
+            Each example is a Swift package of its own that depends on NucleantUI.
+        }
+
+        @Steps {
+            @Step {
+                Create a package named `Sampler` with an executable target, and add
+                NucleantUI to its dependencies.
+
+                @Code(name: "Package.swift", file: "tutorial-sampler-package.swift")
+            }
+        }
+    }
+}

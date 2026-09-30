@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kivy to NucleantUI</title>
+    <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
+    <style>
+        :root {
+            --bg: #1e1e1e;
+            --panel: #252526;
+            --line: #3e3e42;
+            --text: #d4d4d4;
+            --muted: #9d9d9d;
+            --accent: #4c8dff;
+            --accent-hover: #6aa1ff;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            background: var(--panel);
+            border-bottom: 1px solid var(--line);
+            padding: 0.6rem 1rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem 1rem;
+        }
+        header h1 { font-size: 1.05rem; font-weight: 600; }
+        header h1 span { color: var(--muted); font-weight: 400; }
+        .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.9rem; margin-left: auto; font-size: 0.85rem; }
+        .controls label { display: flex; align-items: center; gap: 0.35rem; color: var(--muted); cursor: pointer; }
+        select, button, a.button {
+            font: inherit;
+            font-size: 0.85rem;
+            color: var(--text);
+            background: #333337;
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 0.3rem 0.7rem;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+        button.primary:hover { background: var(--accent-hover); }
+        main {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1px;
+            background: var(--line);
+        }
+        .pane { background: var(--bg); display: flex; flex-direction: column; min-height: 0; }
+        .pane-header {
+            background: var(--panel);
+            border-bottom: 1px solid var(--line);
+            padding: 0.4rem 1rem;
+            font-size: 0.8rem;
+            color: var(--muted);
+            display: flex;
+            justify-content: space-between;
+        }
+        .editor { flex: 1; position: relative; min-height: 0; }
+        .editor > div { position: absolute; inset: 0; }
+        #status { font-variant-numeric: tabular-nums; }
+        @media (max-width: 800px) {
+            main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+            .controls { margin-left: 0; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Kivy → NucleantUI <span>kv in, Swift out</span></h1>
+        <div class="controls">
+            <select id="example" aria-label="Example"></select>
+            <label><input type="checkbox" id="comments" checked> kv notes</label>
+            <label><input type="checkbox" id="app" checked> App</label>
+            <button id="copy">Copy Swift</button>
+            <button id="share" class="primary">Share</button>
+            <a class="button" href="../documentation/nucleantui/kivytonucleantui">Docs</a>
+        </div>
+    </header>
+    <main>
+        <section class="pane">
+            <div class="pane-header"><span>Kivy kv</span></div>
+            <div class="editor"><div id="kv"></div></div>
+        </section>
+        <section class="pane">
+            <div class="pane-header"><span>NucleantUI Swift</span><span id="status">Loading the converter…</span></div>
+            <div class="editor"><div id="swift"></div></div>
+        </section>
+    </main>
+
+    <script>
+    const EXAMPLES = {
+        "Counter — a class with state": `#:set ACCENT get_color_from_hex('#4C8DFF')
+
+<Counter@BoxLayout>:
+    orientation: 'vertical'
+    padding: dp(24)
+    spacing: 12
+    count: 0
+
+    Label:
+        text: 'Taps: {}'.format(root.count)
+        font_size: '28sp'
+        bold: True
+
+    BoxLayout:
+        size_hint_y: None
+        height: 48
+        spacing: 8
+
+        Button:
+            text: '-'
+            on_press: root.count -= 1
+        Button:
+            text: '+'
+            background_color: ACCENT
+            on_release: root.count += 1
+
+Counter:
+`,
+        "Sign in — ids become @State": `BoxLayout:
+    orientation: 'vertical'
+    padding: 20, 10
+    spacing: 10
+    canvas.before:
+        Color:
+            rgba: .1, .1, .12, 1
+        Rectangle:
+            pos: self.pos
+            size: self.size
+
+    Label:
+        text: 'Sign in'
+        font_size: 24
+        size_hint_y: None
+        height: 40
+        halign: 'left'
+
+    TextInput:
+        id: user
+        hint_text: 'User name'
+        multiline: False
+        size_hint_y: None
+        height: 36
+
+    TextInput:
+        id: password
+        hint_text: 'Password'
+        password: True
+        multiline: False
+        size_hint_y: None
+        height: 36
+
+    BoxLayout:
+        size_hint_y: None
+        height: 30
+        CheckBox:
+            id: remember
+            size_hint_x: None
+            width: 30
+        Label:
+            text: 'Remember me' if remember.active else 'Ask me every time'
+
+    Slider:
+        id: volume
+        min: 0
+        max: 11
+        step: 1
+        value: 5
+
+    Label:
+        text: 'Volume %d of 11' % volume.value
+
+    ProgressBar:
+        value: volume.value
+        max: 11
+
+    Button:
+        text: 'Continue as ' + user.text
+        disabled: not user.text
+        on_press: print('sign in', user.text); password.text = ''
+`,
+        "Cards — canvas, pos_hint, style rules": `<Label>:
+    font_size: 18
+
+<Card@FloatLayout>:
+    text: 'Card'
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, 1
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [12]
+    canvas.after:
+        Color:
+            rgb: 0.3, 0.55, 1
+        Line:
+            rounded_rectangle: self.x, self.y, self.width, self.height, 12
+            width: 2
+    Label:
+        text: root.text
+        color: 0, 0, 0, 1
+        pos_hint: {'center_x': .5, 'top': 1}
+        size_hint: None, None
+        size: 200, 40
+    Button:
+        text: 'Open'
+        size_hint: .3, .2
+        pos_hint: {'right': 1, 'y': 0}
+
+GridLayout:
+    cols: 2
+    spacing: 10
+    padding: 10
+    Card:
+        text: 'Inbox'
+    Card:
+        text: 'Archive'
+    AnchorLayout:
+        anchor_x: 'right'
+        anchor_y: 'bottom'
+        Switch:
+            id: wifi
+            active: True
+            size_hint: None, None
+            size: 80, 40
+    Label:
+        text: 'Wi-Fi on' if wifi.active else 'Wi-Fi off'
+`,
+        "Settings — a scrolling list": `<SettingRow@BoxLayout>:
+    text: ''
+    size_hint_y: None
+    height: 44
+    padding: 12, 0
+    Label:
+        text: root.text
+        halign: 'left'
+    Switch:
+        size_hint_x: None
+        width: 60
+
+BoxLayout:
+    orientation: 'vertical'
+    Label:
+        text: 'Settings'
+        font_size: 22
+        bold: True
+        size_hint_y: None
+        height: 56
+    ScrollView:
+        GridLayout:
+            cols: 1
+            spacing: 1
+            size_hint_y: None
+            height: self.minimum_height
+            SettingRow:
+                text: 'Notifications'
+            SettingRow:
+                text: 'Dark mode'
+            SettingRow:
+                text: 'Sounds'
+            SettingRow:
+                text: 'Auto-update'
+    Spinner:
+        id: language
+        values: 'English', 'Deutsch', 'Français'
+        size_hint_y: None
+        height: 44
+    Label:
+        text: 'Language: ' + language.text
+        size_hint_y: None
+        height: 32
+`,
+        "KvSwiftUI's first example": `BoxLayout:
+    orientation: 'vertical'
+    padding: 20
+
+    Label:
+        text: 'Hello NucleantUI'
+        font_size: 24
+        color: [0.2, 0.5, 1.0, 1.0]
+
+    Button:
+        text: 'Click Me'
+        size_hint: 1.0, 0.2
+        background_color: [0.3, 0.7, 0.3, 1.0]
+
+    BoxLayout:
+        orientation: 'horizontal'
+
+        Slider:
+            value: 0.5
+            max: 1
+
+        Label:
+            text: 'Volume'
+`,
+    };
+
+    const select = document.getElementById("example");
+    for (const name of Object.keys(EXAMPLES)) {
+        const option = document.createElement("option");
+        option.textContent = name;
+        select.appendChild(option);
+    }
+
+    function sharedCode() {
+        const code = new URLSearchParams(location.search).get("code");
+        return code ? LZString.decompressFromEncodedURIComponent(code) : null;
+    }
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+    <script type="module">
+        import { init } from "./index.js";
+
+        require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs" } });
+        require(["vs/editor/editor.main"], async () => {
+            monaco.languages.register({ id: "kv", extensions: [".kv"], aliases: ["kv", "Kivy"] });
+            monaco.languages.setMonarchTokensProvider("kv", {
+                tokenizer: {
+                    root: [
+                        [/^\s*#:.*$/, "keyword"],
+                        [/#.*$/, "comment"],
+                        [/<[^>]+>(?=\s*:)/, "type"],
+                        [/^(\s*)(canvas(?:\.before|\.after)?)(?=\s*:)/, ["", "keyword"]],
+                        [/^(\s*)([A-Z]\w*)(?=\s*:)/, ["", "type"]],
+                        [/^(\s*)(on_\w+)(?=\s*:)/, ["", "keyword"]],
+                        [/^(\s*)([a-z_]\w*)(?=\s*:)/, ["", "attribute.name"]],
+                        [/'([^'\\]|\\.)*'/, "string"],
+                        [/"([^"\\]|\\.)*"/, "string"],
+                        [/\b(True|False|None|and|or|not|if|else|in|self|root|app)\b/, "keyword"],
+                        [/\d*\.?\d+/, "number"],
+                    ],
+                },
+            });
+
+            const common = { theme: "vs-dark", automaticLayout: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false };
+            const kv = monaco.editor.create(document.getElementById("kv"), {
+                ...common,
+                language: "kv",
+                value: sharedCode() ?? EXAMPLES[select.value],
+            });
+            const swift = monaco.editor.create(document.getElementById("swift"), { ...common, language: "swift", readOnly: true, value: "" });
+
+            const status = document.getElementById("status");
+            const comments = document.getElementById("comments");
+            const app = document.getElementById("app");
+
+            try {
+                await init();
+            } catch (error) {
+                status.textContent = "The converter did not load";
+                console.error(error);
+                return;
+            }
+
+            let pending;
+            function convert() {
+                const started = performance.now();
+                swift.setValue(window.kivyToNucleantUI(kv.getValue(), { comments: comments.checked, app: app.checked }));
+                status.textContent = `${(performance.now() - started).toFixed(1)} ms`;
+            }
+            function schedule() {
+                clearTimeout(pending);
+                pending = setTimeout(convert, 120);
+            }
+
+            kv.onDidChangeModelContent(schedule);
+            comments.addEventListener("change", convert);
+            app.addEventListener("change", convert);
+            select.addEventListener("change", () => kv.setValue(EXAMPLES[select.value]));
+
+            document.getElementById("copy").addEventListener("click", async (event) => {
+                await navigator.clipboard.writeText(swift.getValue());
+                event.target.textContent = "Copied";
+                setTimeout(() => (event.target.textContent = "Copy Swift"), 1500);
+            });
+            document.getElementById("share").addEventListener("click", async (event) => {
+                const code = LZString.compressToEncodedURIComponent(kv.getValue());
+                await navigator.clipboard.writeText(`${location.origin}${location.pathname}?code=${code}`);
+                event.target.textContent = "Link copied";
+                setTimeout(() => (event.target.textContent = "Share"), 1500);
+            });
+
+            convert();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+@Tutorial(time: 40) {
+    @Intro(title: "Build animated flashcards") {
+        Every part of the animation API doing a job: a card that follows a drag and springs back or flies off, a flip as an animatable view, transitions, and a results screen that counts up.
+
+        The walkthrough for this app is still being written. The finished app is
+        in the repository's `Examples/Flashcards` folder, ready to build and read.
+    }
+
+    @Section(title: "Set up the package") {
+        @ContentAndMedia {
+            Each example is a Swift package of its own that depends on NucleantUI.
+        }
+
+        @Steps {
+            @Step {
+                Create a package named `Flashcards` with an executable target, and add
+                NucleantUI to its dependencies.
+
+                @Code(name: "Package.swift", file: "tutorial-flashcards-package.swift")
+            }
+        }
+    }
+}

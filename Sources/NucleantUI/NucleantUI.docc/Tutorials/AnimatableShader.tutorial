@@ -1,0 +1,23 @@
+@Tutorial(time: 35) {
+    @Intro(title: "Animate a shader") {
+        Shaders kept as PyShader files, their clock replaced by an argument that an animatable view drives, so a tap plays them forward with withAnimation.
+
+        The walkthrough for this app is still being written. The finished app is
+        in the repository's `Examples/AnimatableShader` folder, ready to build and read.
+    }
+
+    @Section(title: "Set up the package") {
+        @ContentAndMedia {
+            Each example is a Swift package of its own that depends on NucleantUI.
+        }
+
+        @Steps {
+            @Step {
+                Create a package named `AnimatableShader` with an executable target, and add
+                NucleantUI to its dependencies.
+
+                @Code(name: "Package.swift", file: "tutorial-animatableshader-package.swift")
+            }
+        }
+    }
+}

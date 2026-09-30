@@ -11,3 +11,6 @@ Examples/*/.build
 Package.resolved
 .build-android-x86_64
 .build-host
+
+# Tools are packages of their own
+Tools/*/.build

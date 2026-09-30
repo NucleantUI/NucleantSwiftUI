@@ -1,0 +1,23 @@
+@Tutorial(time: 40) {
+    @Intro(title: "Build a photo library") {
+        Twenty thousand photos in lazy grids and stacks, month headers pinned while the month scrolls under them, and an info pane laid out by a grid.
+
+        The walkthrough for this app is still being written. The finished app is
+        in the repository's `Examples/Photos` folder, ready to build and read.
+    }
+
+    @Section(title: "Set up the package") {
+        @ContentAndMedia {
+            Each example is a Swift package of its own that depends on NucleantUI.
+        }
+
+        @Steps {
+            @Step {
+                Create a package named `Photos` with an executable target, and add
+                NucleantUI to its dependencies.
+
+                @Code(name: "Package.swift", file: "tutorial-photos-package.swift")
+            }
+        }
+    }
+}

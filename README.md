@@ -56,6 +56,15 @@ The library also runs on iOS 17+ — verified on an M1 iPad Pro.
 and a finger scrolls `ScrollView`s and drives the same gestures a mouse
 does.
 
+## Documentation
+
+The DocC documentation — articles, shader showcases, the tutorials and the
+API reference — is published to <https://nucleantui.github.io/NucleantUI/>
+by `.github/workflows/docs.yml`, together with a Kivy → NucleantUI
+playground (`Tools/KivyToNucleantUI`, compiled to WebAssembly).
+`Scripts/build-docs.sh` builds the same site locally; the catalog is
+`Sources/NucleantUI/NucleantUI.docc`.
+
 ## Declaring a view: `@View`
 
 Write a struct with a `body` and put `@View` on it. The macro adds the

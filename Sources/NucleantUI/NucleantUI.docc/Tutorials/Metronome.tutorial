@@ -1,0 +1,23 @@
+@Tutorial(time: 30) {
+    @Intro(title: "Build a metronome") {
+        An observable metronome edited by the framework's controls — stepper, sliders, pickers in four styles, toggles — with clicks synthesised on the audio thread.
+
+        The walkthrough for this app is still being written. The finished app is
+        in the repository's `Examples/Metronome` folder, ready to build and read.
+    }
+
+    @Section(title: "Set up the package") {
+        @ContentAndMedia {
+            Each example is a Swift package of its own that depends on NucleantUI.
+        }
+
+        @Steps {
+            @Step {
+                Create a package named `Metronome` with an executable target, and add
+                NucleantUI to its dependencies.
+
+                @Code(name: "Package.swift", file: "tutorial-metronome-package.swift")
+            }
+        }
+    }
+}

@@ -1,0 +1,44 @@
+@Tutorials(name: "NucleantUI") {
+    @Intro(title: "Build apps with NucleantUI") {
+        Build the apps in the repository's Examples folder one step at a time,
+        from a calculator to a drum sampler.
+    }
+
+    @Chapter(name: "First apps") {
+        Small, complete apps: controls, state, lists and navigation.
+
+        @Image(source: "tutorial-calculator", alt: "The Calculator example: a display reading 0 over a keypad of round grey and orange buttons.")
+
+        @TutorialReference(tutorial: "doc:Calculator")
+        @TutorialReference(tutorial: "doc:Tasks")
+        @TutorialReference(tutorial: "doc:Sketch")
+    }
+
+    @Chapter(name: "Motion and shaders") {
+        Animations, transitions, and shaders driven from Swift.
+
+        @Image(source: "tutorial-flashcards", alt: "The Flashcards example: a card asking for the capital of Japan, with Missed it, Reveal and Knew it buttons.")
+
+        @TutorialReference(tutorial: "doc:Flashcards")
+        @TutorialReference(tutorial: "doc:AnimatableShader")
+    }
+
+    @Chapter(name: "Collections and layout") {
+        Lazy containers, tables, outlines and layouts of your own.
+
+        @Image(source: "tutorial-photos", alt: "The Photos example: a sidebar of albums beside a grid of landscape thumbnails under a September 2026 header.")
+
+        @TutorialReference(tutorial: "doc:Photos")
+        @TutorialReference(tutorial: "doc:Bookmarks")
+        @TutorialReference(tutorial: "doc:Issues")
+    }
+
+    @Chapter(name: "Audio") {
+        Apps that make sound, with NucleantAudio.
+
+        @Image(source: "tutorial-metronome", alt: "The Metronome example: a large 120 BPM readout with a slider, beside tempo, time, sound and subdivision controls.")
+
+        @TutorialReference(tutorial: "doc:Metronome")
+        @TutorialReference(tutorial: "doc:Sampler")
+    }
+}

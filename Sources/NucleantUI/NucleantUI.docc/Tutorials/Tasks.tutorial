@@ -1,0 +1,23 @@
+@Tutorial(time: 25) {
+    @Intro(title: "Build a task list") {
+        A list bound into an array, a detail screen pushed with a navigation link that edits the same task, and filters as tap targets.
+
+        The walkthrough for this app is still being written. The finished app is
+        in the repository's `Examples/Tasks` folder, ready to build and read.
+    }
+
+    @Section(title: "Set up the package") {
+        @ContentAndMedia {
+            Each example is a Swift package of its own that depends on NucleantUI.
+        }
+
+        @Steps {
+            @Step {
+                Create a package named `Tasks` with an executable target, and add
+                NucleantUI to its dependencies.
+
+                @Code(name: "Package.swift", file: "tutorial-tasks-package.swift")
+            }
+        }
+    }
+}

@@ -1,0 +1,23 @@
+@Tutorial(time: 20) {
+    @Intro(title: "Build a calculator") {
+        A keypad of custom controls: a drag gesture with a pressed state that fires on release inside, a value-type engine behind it, and rows that share the width.
+
+        The walkthrough for this app is still being written. The finished app is
+        in the repository's `Examples/Calculator` folder, ready to build and read.
+    }
+
+    @Section(title: "Set up the package") {
+        @ContentAndMedia {
+            Each example is a Swift package of its own that depends on NucleantUI.
+        }
+
+        @Steps {
+            @Step {
+                Create a package named `Calculator` with an executable target, and add
+                NucleantUI to its dependencies.
+
+                @Code(name: "Package.swift", file: "tutorial-calculator-package.swift")
+            }
+        }
+    }
+}

@@ -1,0 +1,23 @@
+@Tutorial(time: 45) {
+    @Intro(title: "Build a reading list with custom layouts") {
+        A masonry shelf and a list as one custom layout that morphs between them, a tag cloud, and preferences carrying totals up to the window.
+
+        The walkthrough for this app is still being written. The finished app is
+        in the repository's `Examples/Bookmarks` folder, ready to build and read.
+    }
+
+    @Section(title: "Set up the package") {
+        @ContentAndMedia {
+            Each example is a Swift package of its own that depends on NucleantUI.
+        }
+
+        @Steps {
+            @Step {
+                Create a package named `Bookmarks` with an executable target, and add
+                NucleantUI to its dependencies.
+
+                @Code(name: "Package.swift", file: "tutorial-bookmarks-package.swift")
+            }
+        }
+    }
+}
