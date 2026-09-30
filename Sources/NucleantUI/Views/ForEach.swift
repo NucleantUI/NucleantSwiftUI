@@ -46,6 +46,10 @@ extension ForEach where Data == Range<Int>, ID == Int {
 
 extension ForEach: BuiltinView {
     func makeNode(_ context: inout BuildContext) -> ViewNode {
+        // Inside a lazy stack or grid, only the elements in its window.
+        if let cursor = context.lazyCursor {
+            return makeLazyNode(&context, cursor: cursor)
+        }
         let path = context.path
         let built = data.map { element in
             // The identity hash, not the ordinal, is the path component — so a

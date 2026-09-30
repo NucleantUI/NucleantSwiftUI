@@ -260,6 +260,13 @@ public final class ViewHost {
         for action in effects.endPass() {
             action()
         }
+        // Only a pass that built can have changed a preference: every value
+        // is set by a view, not by layout.
+        if builds {
+            for action in effects.preferenceObservers.changes() {
+                action()
+            }
+        }
         return windowRedrawn
     }
 
@@ -337,6 +344,11 @@ public final class ViewHost {
             context.transaction = transaction
             context.path = path
             context.stackAxis = record.stackAxis
+            // A view inside a lazy container rebuilds under the window it
+            // was built under, not eagerly.
+            context.lazyCursor = record.lazyKey.map {
+                LazyBuildCursor(owner: $0.owner, window: $0.window, position: $0.start)
+            }
             let replacement = record.rebuild(&context)
             releaseDeparted()
 
@@ -439,10 +451,11 @@ public final class ViewHost {
 
     // MARK: - Input
 
-    public func pointerDown(id: Int = 0, at point: Point) {
+    public func pointerDown(id: Int = 0, at point: Point, modifiers: EventModifiers = []) {
         if primaryPointer == nil {
             primaryPointer = id
             pointerLocation = point
+            PointerPress.modifiers = modifiers
             updateFocus(at: point)
             touchStart = point
             isScrolling = false

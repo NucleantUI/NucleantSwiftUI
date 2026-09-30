@@ -96,7 +96,7 @@ extension ViewNode {
         if content.clipsChildren {
             guard let local = mapIntoLocalSpace(point), frame.contains(local) else { return nil }
         }
-        for child in children.reversed() {
+        for child in (content.hitTestOrder(node: self) ?? children).reversed() {
             if let hit = child.hitTest(point, select: select) { return hit }
         }
 

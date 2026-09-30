@@ -580,7 +580,9 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     }
 
     public func on_mouse_down(x: Double, y: Double) {
-        MainActor.assumeIsolated { host.pointerDown(at: viewPoint(x: x, y: y)) }
+        MainActor.assumeIsolated {
+            host.pointerDown(at: viewPoint(x: x, y: y), modifiers: Self.currentModifiers)
+        }
     }
 
     public func on_mouse_up(x: Double, y: Double) {
@@ -621,14 +623,14 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         }
     }
 
-    /// The modifier keys of the key event being delivered. The platform's
-    /// key callbacks carry no modifiers, but they run while AppKit is
-    /// dispatching that event — so it is `NSApp.currentEvent`, when that is a
-    /// key event, and otherwise the keyboard's live state.
+    /// The modifier keys of the key or mouse event being delivered. The
+    /// platform's callbacks carry no modifiers, but they run while AppKit is
+    /// dispatching that event — so it is `NSApp.currentEvent`, when that is
+    /// a key event or a press, and otherwise the keyboard's live state.
     private static var currentModifiers: EventModifiers {
         #if os(macOS)
         let current = NSApp.currentEvent
-        let flags = current.map { [.keyDown, .keyUp].contains($0.type) } == true
+        let flags = current.map { [.keyDown, .keyUp, .leftMouseDown].contains($0.type) } == true
             ? current!.modifierFlags
             : NSEvent.modifierFlags
         var modifiers: EventModifiers = []

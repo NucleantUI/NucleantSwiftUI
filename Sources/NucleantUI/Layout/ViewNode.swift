@@ -55,6 +55,27 @@ final class ViewNode {
     /// Motion is inherited only by the node's maker.
     var ownerPath: [Int]?
 
+    /// The element of a lazy container's `ForEach` this node is part of —
+    /// see `LazyLayout.swift`.
+    var lazyTag: LazyElementTag?
+
+    /// Set on a `Section`'s header or footer, for a lazy container that
+    /// pins them.
+    var sectionTag: SectionTag?
+
+    /// What `.gridCellColumns` and its kin said about the view this node
+    /// stands for, carried up through the modifiers around it to the
+    /// `Grid` that lays it out.
+    var gridCellTraits: GridCellTraits?
+
+    /// What `.layoutValue(key:value:)` set on the view this node stands
+    /// for, carried up the same way, for the custom `Layout` that reads it.
+    var layoutValues: LayoutValues?
+
+    /// What this subtree reduced to for each preference key asked about so
+    /// far — see `PreferenceKey.swift`. Dropped with the measurements.
+    var preferenceCache: [ObjectIdentifier: OpaqueValue] = [:]
+
     /// Measurements taken so far, keyed by the proposal that produced them.
     ///
     /// Layout asks the same question repeatedly: a stack measures every child
@@ -101,6 +122,10 @@ final class ViewNode {
         while let current = node {
             current.measurements.removeAll(keepingCapacity: true)
             current.flexibilities.removeAll(keepingCapacity: true)
+            // Preferences reduced from the old subtree, and a custom
+            // layout's cache built from it, are stale the same way.
+            current.preferenceCache.removeAll(keepingCapacity: true)
+            (current.content as? LayoutCacheOwner)?.subviewsChanged()
             node = current.parent
         }
     }
@@ -236,6 +261,11 @@ protocol NodeContent {
     /// squeeze a `Text`. Takes the node so a wrapper can answer for what it
     /// wraps and a stack for its children.
     func flexibility(along axis: Axis, node: ViewNode) -> LayoutPriorityClass
+
+    /// The children in paint order, when that isn't `children` — a lazy
+    /// container draws its pinned headers last, over the rows, and they
+    /// must be hit first too. `nil` for the usual order.
+    func hitTestOrder(node: ViewNode) -> [ViewNode]?
 }
 
 extension NodeContent {
@@ -251,6 +281,7 @@ extension NodeContent {
     var animatesSize: Bool { true }
     var isParked: Bool { false }
     var clipsChildren: Bool { false }
+    func hitTestOrder(node: ViewNode) -> [ViewNode]? { nil }
 
     /// Most nodes are as flexible as whatever they wrap — a padded, tinted,
     /// tappable fixed frame is still fixed. Only a `Spacer` (fully flexible),
@@ -326,6 +357,10 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
     // The node the view standing here last produced, when it is the same
     // view — the one a fresh build takes its motion over from.
     var predecessor: ViewNode?
+    // Inside a lazy container: the window and starting unit this build is
+    // under, which a standing view must have been built under too.
+    let lazyCursor = context.lazyCursor
+    let lazyKey = lazyCursor?.key
 
     if let candidate = context.records.candidate(at: path) {
         let standing = candidate.entry
@@ -334,6 +369,8 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
             reason = "identity"
         } else if standing.stackAxis != context.stackAxis {
             reason = "stack axis"
+        } else if standing.lazyKey != lazyKey {
+            reason = "lazy window"
         } else if context.isDirty(under: path) {
             reason = "dirty"
         } else if !standing.environment._isEquivalent(to: context.environment) {
@@ -345,6 +382,7 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
         }
         if reason == nil {
             context.records.reuse(candidate, at: path)
+            lazyCursor?.position += standing.lazyUnits
             PerfTrace.nodesReused += 1
             PerfTrace.trace("reuse \(path) \(V.self)")
             return standing.node
@@ -384,7 +422,16 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
     if let builtin = view as? BuiltinView {
         context.viewIdentity = identity
         context.isReplacingStandingView = predecessor != nil
+        // Only the views that dissolve into a lazy container's layout build
+        // under its cursor; any other builtin is one of its items, and
+        // builds what it holds eagerly.
+        let passesCursor = builtin is LazyPassThrough
+        if !passesCursor { context.lazyCursor = nil }
         node = builtin.makeNode(&context)
+        context.lazyCursor = lazyCursor
+        if !passesCursor, let lazyCursor {
+            lazyCursor.position += node.lazyLayoutCount
+        }
     } else {
         // The body's `@Observable` reads belong to this view. Only the body
         // itself is inside the scope — the child it returns is built after,
@@ -408,6 +455,8 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
                 children: [body]
             )
             node.transitionTrait = body.transitionTrait
+            node.gridCellTraits = body.gridCellTraits
+            node.layoutValues = body.layoutValues
         }
     }
     if node.ownerPath == nil { node.ownerPath = path }
@@ -433,7 +482,9 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
             node: node,
             stateKeys: stateKeys,
             reads: reads,
-            isBoundary: isBoundary
+            isBoundary: isBoundary,
+            lazyKey: lazyKey,
+            lazyUnits: lazyKey.map { lazyCursor!.position - $0.start } ?? 0
         ),
         at: path
     )

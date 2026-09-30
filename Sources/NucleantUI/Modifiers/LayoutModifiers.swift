@@ -62,6 +62,8 @@ extension _ModifierView: BuiltinView {
         // A `.transition` belongs to the whole modified view, wherever in
         // its chain of modifiers it was written.
         node.transitionTrait = nodeContent.transitionTrait ?? child.transitionTrait
+        node.gridCellTraits = child.gridCellTraits
+        node.layoutValues = child.layoutValues
         return node
     }
 }
@@ -99,6 +101,8 @@ extension _DecoratedView: BuiltinView {
             children: [contentNode, decorationNode]
         )
         node.transitionTrait = contentNode.transitionTrait
+        node.gridCellTraits = contentNode.gridCellTraits
+        node.layoutValues = contentNode.layoutValues
         return node
     }
 }

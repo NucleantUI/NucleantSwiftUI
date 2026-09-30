@@ -27,8 +27,25 @@ struct TextContent: NodeContent {
         // The half-point slack absorbs the difference between summed glyph
         // advances here and ThorVG's own layout.
         let fitsOneLine = TextMeasurer.width(of: string, font: font) <= rect.width + 0.5
+        // Text that wraps is drawn as the lines layout measured, joined by
+        // line feeds, and not wrapped again: the box is as wide as the
+        // widest of them, and ThorVG, whose advances come out a fraction
+        // wider, would break that line once more and draw a line more than
+        // the box has room for. Wrapping at the narrower of the proposal and
+        // the box gives the lines sizing gave — every measured line fits,
+        // and no word that didn't fit then fits now — or, in a box a parent
+        // squeezed, the lines that fit it.
+        let wrapsAsMeasured = !fitsOneLine && lineLimit != 1
+        let drawn = wrapsAsMeasured
+            ? TextMeasurer.wrap(
+                string,
+                font: font,
+                maxWidth: min(proposal.width ?? .infinity, rect.width + 0.5),
+                lineLimit: lineLimit
+            ).joined(separator: "\n")
+            : string
         list.append(.text(TextDraw(
-            string: string,
+            string: drawn,
             frame: rect,
             font: font,
             color: context.resolve(animatedColor.map { $0.current(of: .color(color)).flatColor } ?? color),
@@ -38,8 +55,9 @@ struct TextContent: NodeContent {
             // really is too wide.
             isTruncated: lineLimit == 1 && !fitsOneLine,
             // A string that fits one line is drawn as one line, whatever
-            // ThorVG's layout would make of the exact-fit box.
-            wraps: !fitsOneLine,
+            // ThorVG's layout would make of the exact-fit box; one broken
+            // into lines above keeps those lines.
+            wraps: !fitsOneLine && !wrapsAsMeasured,
             transform: context.transform,
             clip: context.clip,
             clipCornerRadius: context.clipCornerRadius

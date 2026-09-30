@@ -29,6 +29,11 @@ public struct BuildContext {
     /// rather than being inferred later.
     var stackAxis: Axis?
 
+    /// Set inside a lazy stack or grid, down through the views that dissolve
+    /// into its layout: which of its units to build, and the count so far.
+    /// See `LazyLayout.swift`.
+    var lazyCursor: LazyBuildCursor?
+
     let store: StateStore
 
     /// `onAppear` / `onDisappear` actions collected during this pass, run
@@ -125,6 +130,10 @@ final class EffectQueue {
     /// so it runs with what that build captured.
     private var disappearing: [StateKey: () -> Void] = [:]
 
+    /// Every `.onPreferenceChange` standing — checked after each pass that
+    /// built, and forgotten with the views that attached them.
+    let preferenceObservers = PreferenceObservers()
+
     func onAppear(_ key: StateKey, _ action: @escaping () -> Void) {
         guard !appeared.contains(key) else { return }
         appeared.insert(key)
@@ -144,6 +153,7 @@ final class EffectQueue {
     /// Forget the views at `paths`, so one that comes back appears again —
     /// and run their `onDisappear` actions with this pass's effects.
     func forget(paths: Set<[Int]>) {
+        preferenceObservers.forget(paths: paths)
         if !appeared.isEmpty {
             appeared = appeared.filter { !paths.contains($0.path) }
         }
@@ -276,6 +286,11 @@ final class RebuildRecords {
         /// `RenderBoundaryContent`. Sticky: carried over every rebuild of
         /// the same view at this position.
         var isBoundary = false
+        /// The lazy window and starting unit this view was built under, if
+        /// it was built inside a lazy container, and how many units it
+        /// took — reused only under the same, and then it takes the same.
+        var lazyKey: LazyBuildKey? = nil
+        var lazyUnits = 0
     }
 
     /// Entries for the tree as it stands.

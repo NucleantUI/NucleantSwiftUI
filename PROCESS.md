@@ -1943,3 +1943,343 @@ Honest limits:
   other keyboard-trait modifiers aren't here.
 * `@FocusState` / `.focused` is its own checklist item.
 * The `Formatter` path is built and checked on macOS only.
+
+## 31. List, Section, Form, OutlineGroup, Table
+
+`research/SwiftUI-api` gave the surface. All five live in
+`Sources/NucleantUI/Views/Collections/`, and the Issues example
+(`Examples/Issues`) is an issue tracker built on them.
+
+**Finding the rows.** A `List` finds its rows the way `Picker` finds its
+choices (`ListContent.swift`): a static walk through tuples, `Group`,
+`ForEach`, `if` and modifiers, reading stored fields and never a `body`.
+Every view it reaches is a row, and a view of your own is one row. A row's
+selection value is its `.tag`, or the id of the `ForEach` or `OutlineGroup`
+element it was built for. A `Section` adds a header item, its rows and a
+footer item. An `OutlineGroup` or a `DisclosureGroup` adds a row with a
+chevron and, while open, its children one level in. Each item's id hashes
+the path the walk took, a `ForEach` row by its element's id, so a row's
+`@State` stays with it as rows come and go. A row is drawn as an `AnyView`,
+the erasure boundary `Picker` already uses: a list's rows are any types, as
+many as a `ForEach` has elements. The row modifiers (`.listRowInsets`,
+`.listRowBackground`, `.listRowSeparator`, `.listRowSeparatorTint`,
+`.badge`, `.selectionDisabled`) wrap their content in a view the walk reads
+as a trait of the rows inside it.
+
+**Selection** (`CollectionSelection.swift`) takes each shape SwiftUI does:
+none, `Binding<V>`, `Binding<V?>` and `Binding<Set<V>>`. Rows select on
+press, as on macOS. ⌘-click adds or removes a row, ⇧-click selects the run
+from the anchor, and a click below the rows clears the selection. While
+the collection has the keys, ↑/↓ move (⇧ to extend), ⌥/⌘-arrows, Home and
+End go to the ends, ⌘A selects all, Return runs the primary action and
+Delete runs `.onDeleteCommand`. In a list, ← and → close and open outline
+rows, and ← on a child goes to its parent. The keys come through a
+`FocusTarget` on a node around the whole list (`_CollectionFocus`), which
+is a tab stop. The single-value overloads are `@_disfavoredOverload`, so
+`List(selection: $set)` doesn't bind a `Set` as one value.
+
+A press carried no modifier keys. `ViewHost.pointerDown` now takes
+`modifiers:`, `HostingWindow` passes the ones of the mouse-down (its
+`currentModifiers` now also reads `.leftMouseDown` events), and a target
+reads them from `PointerPress.modifiers`. These are the only changes to
+existing code, besides new `PickerContentSource` conformances for `Section`
+(choices in sections, a rule between them) and the row trait view.
+
+`.contextMenu(forSelectionType:menu:primaryAction:)` is new too. A right
+click on a selected row opens the menu for the selection; on another row,
+for that row alone; below the rows, for none. The primary action runs on a
+double click (two presses on one row within half a second) and on Return.
+`EnvironmentValues.backgroundProminence` is `.increased` on a selected row
+while its collection has the keys, so a cell drawing its own secondary
+text can turn it white there.
+
+**List styles** follow `PickerStyle`'s shape, an underscored `_kind`:
+`.inset` (the desktop default), `.plain`, `.sidebar`, `.bordered`,
+`.grouped` and `.insetGrouped` (the phone default).
+`.alternatingRowBackgrounds()` shades every other row. A sidebar's sections
+collapse from a chevron its header shows under the pointer. Only the
+chevron does that, so a click on the header doesn't. `Section(isExpanded:)`
+makes a section collapsible in any list.
+
+**OutlineGroup** mirrors SwiftUI's generics, `Subgroup ==
+DisclosureGroup<Leaf, OutlineSubgroupChildren>`. Outside a list each element
+with children is a `DisclosureGroup`, and `OutlineSubgroupChildren` holds
+the subtree as an `AnyView`, since the type would have to contain itself.
+In a list the tree flattens into indented rows. Leaves keep the chevron's
+column so they line up with their siblings' labels. Expansion is kept by
+the list, by row id.
+
+**Form** splits a control with a label (`Picker`, `Slider`, `Stepper`,
+`TextField`, `SecureField`, `Toggle`, `LabeledContent`) into its label and
+the control drawn with `.labelsHidden()`. The styles place the two:
+
+* `.columns` (desktop) is two node contents of its own. The label column is
+  as wide as the widest label (at most two fifths), with labels against its
+  trailing edge and controls lined up after it. A toggle keeps its label in
+  the control column, and a section's header takes the label column beside
+  its first row. Footers go in the control column.
+* `.grouped` (phone) draws sections as rounded groups, each row a label
+  leading and the control trailing (`LabeledRowContent`). A text field or
+  slider fills the rest of the row, and a toggle is a switch unless its own
+  style says otherwise.
+
+`FormStyle` can be implemented, as `DisclosureGroupStyle` can.
+`LabeledContent` is new with it: `(_:value:)`, `(_:value:format:)` and a
+content builder.
+
+**Table** keeps its columns typed. A `TableColumnBuilder` block becomes
+nested pairs through `buildPartialBlock`. A parameter pack would need
+`repeat (each Column).TableRowValue == RowValue`, and Swift 6.3.3 still
+says "same-element requirements are not yet supported". Each column hands
+the table a spec: its header, width, sorting, and a closure building its
+cell for a row. That closure captures the concrete content type, so there is
+no `AnyView` per cell. A cell's reads of an `@Observable` row are tracked
+at its row's path, so an edit rebuilds that row alone. The initializers
+match SwiftUI's: over data, or `of:` with a `TableRowBuilder` (`TableRow`,
+`if`, `for`), each with no selection, one or a set, and with or without a
+`sortOrder`. `TableColumn` has every title/`value:`/`sortUsing:`/
+`comparator:` form. Unsorted columns are `Sort == Never`, which Foundation
+already makes a `SortComparator`. A header click makes that column's
+comparator the first key, and a second click flips its order. Sorting the
+rows is the caller's, as in SwiftUI.
+
+Column widths come from one `TableColumnLayout` per build, shared by the
+header and every row. Fixed, ideal and dragged widths come first, the rest
+share what is left, and leftover space goes to the last column that can
+grow. When the columns don't fit, the ones that can give shrink in
+proportion to their room above their minimums. Dragging the edge between
+two headers resizes the column on its left. `.tableStyle(.inset)` (which
+alternates rows by default, or not with
+`.inset(alternatesRowBackgrounds:)`), `.bordered` and
+`.tableColumnHeaders(.hidden)` are there.
+
+Verified headless, in a scratch package driving `ViewHost`:
+
+* In a list: a click, ⌘-click add and remove, ⇧-click runs, ↓ and ⇧↓, ⌘↑,
+  and a click below the rows clearing the selection.
+* In a sidebar: tags and outline ids selectable with children closed, →
+  opening an outline row, a nested folder staying closed, ← going to the
+  parent.
+* In a table: a header click making its column the first key, a second
+  flipping it, rows following the order, ⇧-click on rows.
+* Every `List`/`Table` overload compiling from outside the module.
+
+The layout trace put a columns form's labels flush against x = 97 and its
+controls at 105.
+
+The Issues example was first looked at by rendering its real view tree
+into a ThorVG software canvas (`tvg_swcanvas_create` under a
+`ThorDisplayRenderer`) and writing PNGs. That turned up the column
+shrinking above, the need for `backgroundProminence`, and two limits
+below. It was then run as the app, driven with posted `CGEvent`s and
+captured with `screencapture`, in dark mode:
+
+* a click, ⇧-click and ⌘-click with AppKit's modifiers, ↓ and ⇧↓;
+* a header click sorting, a right click opening the menu for the row
+  under it, and a drag on a header edge widening Title;
+* the outline opening and a subproject's scope;
+* a double click opening an issue, and typing in the filter field.
+
+That run showed the sidebar's selection too faint in dark mode (now
+stronger), and the example leaving an opened issue up when the sidebar
+selection changed (now closed).
+
+Honest limits:
+
+* All rows are built. There is no laziness, and keyboard moves don't
+  scroll the selected row into view (there is no `ScrollViewReader` yet).
+* A `Section`, `ForEach` or tag inside a view of your own isn't seen by the
+  walk — as with `Picker`.
+* Not there: `List($items)` over bindings, `.onDelete`/`.onMove`,
+  `.swipeActions`, edit mode, `.refreshable`, sticky section headers.
+* Adjacent selected rows are separate highlights, not one joined shape.
+* A table doesn't scroll sideways. Columns can't be reordered or hidden
+  (`TableColumnCustomization`), there are no outline tables
+  (`Table(_:children:)`), and `ForEach` can't produce table rows (our
+  `ForEach` requires `Content: View`), so a rows block takes `TableRow`,
+  `if` and `for`.
+* A text field in a form still shows its title as its placeholder.
+* A `.columns` form doesn't scroll; put it in a `ScrollView`.
+* Found on the way, not fixed: a `Text` that starts with spaces draws
+  nothing (ThorVG), and a truncated `Text` drops whole words ("In
+  Progress" became "…" in a column one point too narrow).
+* Default styles pick desktop or phone with `#if os(iOS) || os(Android)`,
+  as `DefaultToggleStyle` does. Everything else is platform-independent.
+
+## 32. Preferences and the `Layout` protocol
+
+`research/SwiftUI-api` gave the surface for both.
+
+### Preferences
+
+`PreferenceKey`, `.preference(key:value:)`, `.transformPreference` and
+`.onPreferenceChange` (`State/PreferenceKey.swift`,
+`Modifiers/PreferenceModifiers.swift`).
+
+A preference can't be passed up during the build. A scoped rebuild
+replaces a subtree without running its ancestors again, so an ancestor
+only sees a new value by looking down. The value is read off the built
+node tree instead: `ViewNode.preference(_:)` combines its children's
+values with the key's `reduce`, then lets a writer or transform node
+change the result. Views that set nothing don't take part, which is how
+OpenSwiftUI's combiner works too. `reduce` only sees values that someone
+set. Each node caches its result per key, and `invalidateMeasurementsUpwards`
+clears the caches above a graft, so a lookup only walks the part of the
+tree that changed.
+
+`.onPreferenceChange` registers its node with the `EffectQueue`. After a
+pass that built something, `ViewHost.update` asks each registration for
+its subtree's value and runs the action when that value differs from the
+one it last delivered. The action also runs once when the view appears.
+Actions run after `onAppear`, so a state write inside one lands in the next
+frame. The last delivered value is kept by path across rebuilds of the
+observing view, so a parent that re-runs doesn't deliver the same value
+again. Registrations are dropped in `EffectQueue.forget(paths:)`, the same
+place `onAppear` marks are dropped.
+
+### Layout
+
+`Layout`, `LayoutSubviews`/`LayoutSubview`, `LayoutProperties`,
+`ViewDimensions`, `ViewSpacing`, `LayoutValueKey`/`.layoutValue`, and
+`ProposedViewSize` as an alias of `ProposedSize` (`Layout/CustomLayout.swift`).
+`HStackLayout`, `VStackLayout` and `ZStackLayout` are in
+`Layout/StackLayouts.swift`, and `AnyLayout` is in `Layout/AnyLayout.swift`.
+The signatures are SwiftUI's with `Size`/`Rect`/`Point` in place of the CG
+types.
+
+`MyLayout { … }` builds a single node, `CustomLayoutContent`, with the
+subviews as its layout children (a `Group` or `ForEach` among them
+flattens, as it does in a stack). `sizeThatFits` answers the node's.
+During `placeSubviews`, `LayoutSubview.place` records a position, anchor
+and proposal, and the node then places each child there. A subview that
+wasn't placed is centred at its ideal size. The cache is made on first use.
+It is updated (`updateCache`) when a scoped rebuild replaces anything
+beneath the node, which `invalidateMeasurementsUpwards` reports through
+`LayoutCacheOwner`. `layoutProperties.stackOrientation` becomes the
+`stackAxis` a `Spacer` or `Divider` inside follows. A layout's
+`animatableData` animates the way an `Animatable` view does: the node is
+rebuilt at each value in between, and its subviews, which are equivalent,
+are kept.
+
+The stack layouts are standalone `Layout` conformers written against
+`LayoutSubviews`, sizing the way `StackContent` does (least flexible first,
+ideal extents when everything fits). `StackContent` is not changed or
+shared. `AnyLayout` erases through a class hierarchy (`LayoutStorage<L>`,
+`LayoutCacheBox<L>`), and the containing view keeps its type whichever
+layout it holds. Switching layouts therefore keeps the subviews and their
+`@State`.
+
+`AnyLayout` animates in the two ways SwiftUI's does:
+* **Switching to a layout of another type** moves the frames. The two
+  layouts' `animatableData` have nothing in common to interpolate, so each
+  subview moves from its old rect to its new one through `NodeMotion`, the
+  same way a reordered `ForEach` animates. Traced: H → V moved the second
+  subview (50, 0) → (34.5, 9.3) → (19.0, 18.6) → (3.9, 27.7) → (0, 30).
+* **The same type of layout with new parameters** animates the wrapped
+  layout's `animatableData`, exactly as if the layout were used directly.
+  `_LayoutView` asks `AnyLayoutStorage.animated(in:)`, which animates
+  `TypedLayout<L>`. That wrapper tags the data with the layout's type,
+  because the animation store keeps one value per path and type: two
+  different layouts that both animate a `Double` must not interpolate from
+  each other. Traced with a radial layout turning 180°: the subview stayed
+  100 pt from the centre on every frame, going round the arc rather than
+  straight through the middle. Switching that radial layout to a diagonal
+  one (both `Double`) fell back to moving frames in a straight line.
+
+**Changes to existing code**, all required by the features above:
+* `ViewNode` gained `layoutValues` and `preferenceCache`.
+  `invalidateMeasurementsUpwards` now also clears the preference caches
+  and marks a custom layout's cache stale.
+* `layoutValues` is carried upward wherever `gridCellTraits` is: in
+  `_ModifierView`, in `_DecoratedView` and around a render boundary in
+  `buildNode`.
+* `EffectQueue` owns the `PreferenceObservers` and forgets them with the
+  other effects.
+* `ViewHost.update` runs the preference changes after a pass that built.
+
+Verified headlessly by driving a `ViewHost` with
+`NUCLEANT_SWIFTUI_TRACE_LAYOUT` on:
+* Sums reduce and update after deep `@Observable` writes (6 → 14 → 18),
+  and an idle pass fires nothing.
+* A writer replaces its subtree's value and a transform edits it (100 + 7×10).
+* `layoutValue` ranks reorder a diagonal layout, and `updateCache` runs when
+  a subview beneath it is rebuilt.
+* `animatableData` steps 20 → 35.6 → 50.8 → 60 under a linear animation.
+* An unplaced subview is centred.
+* `AnyLayout` switching from H to V keeps both subviews (their `onAppear`
+  doesn't run again) and places them correctly.
+
+Not there:
+* `anchorPreference` and `overlayPreferenceValue`/`backgroundPreferenceValue`:
+  there is no `Anchor` or `GeometryReader` yet, and a decoration built from
+  a preference would need a rebuild in the same pass when a scoped rebuild
+  changes the value.
+* `Layout.explicitAlignment` and `ViewDimensions[explicit:]`: alignments are
+  fixed enums, and there is no `.alignmentGuide`.
+* `LayoutSubview.priority`: there is no `.layoutPriority` yet.
+* `LayoutSubviews.layoutDirection`.
+* A `_LayoutView` rebuilt because its parent re-ran with a different
+  layout or content gets a fresh cache (`makeCache`) rather than an
+  `updateCache`.
+
+### The Bookmarks example
+
+`Examples/Bookmarks` is a reading list built on all of the above:
+* `ShelfLayout` shows the cards as a masonry or a list, with featured cards
+  spanning two columns through `ColumnSpan`.
+* `BookmarkTileLayout` arranges one bookmark's pieces as a card or a row.
+* `FlowLayout` wraps the tag chips.
+* `EqualWidthHStack` gives the inspector's actions one width.
+* `AnyLayout` switches the sidebar's tags between a cloud and a list.
+* The shelf names itself to the window bar through a preference, and
+  every card adds its bookmark to the totals in the status bar through
+  another.
+
+The app was run and driven with posted `CGEvent`s (Return through System
+Events) and captured with `screencapture`: zoom, the cards/list switch
+both ways (captured mid-morph), the tag cloud/list switch, selecting,
+choosing a tag, saving an address, and marking a card read.
+
+**Morphing a card into a row.** The first version switched the card's
+body between two view trees, `if isCompact { row } else { card }`. Only
+the card's background was the same view in both, so it was the only thing
+that animated, and the contents jumped. A second version kept every piece
+the same view and let `NodeMotion` move the pieces while the card's
+animatable body was also re-laid out each frame. That was two animations
+driving one thing, and text, which keeps its new size while it travels,
+stuck out of cards that hadn't grown yet. The version that works drives
+everything from a single number:
+* `ShelfLayout.animatableData` is the column width and how far the shelf
+  is towards the list.
+* Each card's `compactness` is the same fraction, animated by the same
+  transaction.
+* At every frame each card is placed partway between its masonry rect and
+  its list rect, and each piece of it partway between its card rect and
+  its row rect.
+
+The commit frame is sampled at the old value, so no displacement starts,
+and one animation moves everything. The pieces sit on the same side in
+both arrangements, so nothing crosses on the way, and the summary shows
+only in the quarter of the morph nearest the card. A layout `AnyLayout`
+switches between two types still animates by moving frames; that is right
+for leaves that keep their size (the sidebar's tag chips), and wrong for a
+morph whose text should re-wrap as it goes.
+
+**Wrapped text drawn a line longer than measured.** This one is in the
+framework. Multi-line text was handed to ThorVG in a box exactly as wide
+as its widest line, and ThorVG re-wrapped it with advances a fraction
+wider, breaking that line again. The extra line spilled over whatever sat
+under the text. It is the multi-line case of §20's "A fitted label wrapped
+when drawn". `TextContent.place` now draws the lines layout measured,
+joined by line feeds, with ThorVG's wrapping off. It wraps at the narrower
+of the proposal and the box width plus half a point, which gives exactly
+sizing's greedy breaks, or the lines that fit a box a parent squeezed.
+
+**Cost.** A morph frame rebuilds the 30 animating card bodies and lays out
+the shelf. Measuring each card once, at the width it has this frame, and
+using that height in both arrangements halved the measuring (1,573 → 674
+calls a frame). A frame still takes 55–65 ms in a debug build. A release
+build could not be tried: `swift build -c release` fails in
+`Views/Navigation.swift:138` ("sending 'path' risks causing data races"),
+which predates this work.
+

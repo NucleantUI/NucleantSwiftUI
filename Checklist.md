@@ -23,8 +23,8 @@
 - [x] AnyView
 - [x] Group
 - [x] ForEach
-- [ ] PreferenceKey / .preference / .onPreferenceChange
-- [ ] Layout protocol
+- [x] PreferenceKey / .preference / .onPreferenceChange
+- [x] Layout protocol
 - [ ] EquatableView / .equatable
 
 ## State & data flow
@@ -48,9 +48,9 @@
 - [x] Divider
 - [x] ScrollView
 - [ ] ScrollViewReader
-- [ ] LazyVStack / LazyHStack
-- [ ] LazyVGrid / LazyHGrid
-- [ ] Grid / GridRow
+- [x] LazyVStack / LazyHStack
+- [x] LazyVGrid / LazyHGrid
+- [x] Grid / GridRow
 - [ ] GeometryReader
 - [ ] ViewThatFits
 
@@ -82,11 +82,11 @@
 - [ ] ShareLink
 
 ## Collections
-- [ ] List
-- [ ] Section
-- [ ] Form
-- [ ] OutlineGroup
-- [ ] Table
+- [x] List
+- [x] Section
+- [x] Form
+- [x] OutlineGroup
+- [x] Table
 
 ## Navigation & presentation
 - [x] NavigationStack
