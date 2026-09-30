@@ -19,6 +19,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # The Nucleant manifests pick path dependencies when a sibling checkout
+  # exists — which SwiftPM's own .build/checkouts can look like. Force the
+  # GitHub sources for the whole chain.
+  NUCLEANT_LOCAL_DEV: "0"
   SWIFT_TOOLCHAIN: "6.3.3"
   WASM_SDK_URL: https://download.swift.org/swift-6.3.3-release/wasm-sdk/swift-6.3.3-RELEASE/swift-6.3.3-RELEASE_wasm.artifactbundle.tar.gz
   WASM_SDK_CHECKSUM: cabfa08b73bb8ac783927ecd15fa386e99d0c139c5f232445067bcf58379cae7
