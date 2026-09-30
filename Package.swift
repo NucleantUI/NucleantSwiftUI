@@ -71,11 +71,15 @@ func platformProviders() -> [Target.Dependency] {
 }
 
 func nucleantDependencies() -> [Package.Dependency] {
-    let repos = ["NucleantVulkan", "NucleantThorVG", "NucleantApplication", "PyShader"]
-    return repos.map { name in
+    // Repository and its default branch — PyShader's is `main`.
+    let repos = [
+        ("NucleantVulkan", "master"), ("NucleantThorVG", "master"),
+        ("NucleantApplication", "master"), ("PyShader", "main"),
+    ]
+    return repos.map { name, branch in
         localDev
             ? .package(path: "../\(name)")
-            : .package(url: "https://github.com/NucleantUI/\(name).git", branch: "master")
+            : .package(url: "https://github.com/NucleantUI/\(name).git", branch: branch)
     }
 }
 
