@@ -265,6 +265,48 @@ struct OffsetContent: NodeContent {
     }
 }
 
+/// `.position(x:y:)` — the child's center pinned to a point in this node's
+/// own space. The node takes everything it is offered, so that space is the
+/// parent's; the child is offered the same and keeps its own size.
+struct PositionContent: NodeContent {
+    let position: Point
+
+    /// Like a `Color`, it fills what it is given.
+    func flexibility(along axis: Axis, node: ViewNode) -> LayoutPriorityClass {
+        .flexible
+    }
+
+    func sizeThatFits(_ proposal: ProposedSize, node: ViewNode) -> Size {
+        // An axis with no finite extent offered has nothing to fill: there
+        // the node is as big as the child.
+        func finite(_ value: Double?) -> Double? {
+            value.flatMap { $0.isFinite ? $0 : nil }
+        }
+        let width = finite(proposal.width)
+        let height = finite(proposal.height)
+        if let width, let height { return Size(width: width, height: height) }
+        let child = node.singleChild?.sizeThatFits(proposal) ?? .zero
+        return Size(width: width ?? child.width, height: height ?? child.height)
+    }
+
+    func place(node: ViewNode, in rect: Rect, proposal: ProposedSize, context: DrawContext, into list: inout DisplayList) {
+        guard let child = node.singleChild else { return }
+        let inner = ProposedSize(rect.size)
+        let size = child.sizeThatFits(inner)
+        child.place(
+            in: Rect(
+                x: rect.minX + position.x - size.width / 2,
+                y: rect.minY + position.y - size.height / 2,
+                width: size.width,
+                height: size.height
+            ),
+            proposal: inner,
+            context: context,
+            into: &list
+        )
+    }
+}
+
 /// `.rotationEffect(_:)` and `.scaleEffect(_:)` — a transform about an anchor
 /// inside the node's own rect, again with no effect on layout.
 struct TransformContent: NodeContent {

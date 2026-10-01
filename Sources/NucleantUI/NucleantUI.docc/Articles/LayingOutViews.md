@@ -40,6 +40,19 @@ offers — a progress bar is a ``Capsule`` in a ``ZStack`` sized this way,
 without a geometry reader. `.aspectRatio(_:contentMode:)`, `.scaledToFit()`
 and `.scaledToFill()` keep proportions.
 
+`.position(x:y:)` places a view by its center instead: the view keeps its
+own size, its center lands on the point, and the point is measured in the
+space its parent offers — which the positioned view takes all of. Unlike
+`.offset(x:y:)`, it changes layout, not just drawing:
+
+```swift
+ZStack {
+    ForEach(pins) { pin in
+        PinLabel(pin).position(pin.point)   // centered on each pin's point
+    }
+}
+```
+
 A habit that keeps rows tidy: give the growing text in a row
 `.frame(maxWidth: .infinity, alignment: .leading)` rather than a
 ``Spacer`` after it. The fixed items are sized first and the text gets what

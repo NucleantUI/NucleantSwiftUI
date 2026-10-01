@@ -168,6 +168,27 @@ extension View {
     }
 }
 
+// MARK: - Position
+
+extension View {
+    /// Positions the center of this view at `position` in its parent's
+    /// coordinate space.
+    ///
+    /// The result takes all the space its parent offers — it is the space
+    /// the point is measured in — and the view inside keeps its own size.
+    public func position(_ position: Point) -> some View {
+        _ModifierView(content: self, key: ["position", position] as [AnyHashable]) { _ in
+            PositionContent(position: position)
+        }
+    }
+
+    /// Positions the center of this view at `x`, `y` in its parent's
+    /// coordinate space.
+    public func position(x: Double = 0, y: Double = 0) -> some View {
+        position(Point(x: x, y: y))
+    }
+}
+
 // MARK: - Padding
 
 extension View {

@@ -123,7 +123,7 @@
 - [x] .frame
 - [x] .padding
 - [x] .offset
-- [ ] .position
+- [x] .position
 - [ ] .fixedSize
 - [ ] .layoutPriority
 - [ ] .zIndex
