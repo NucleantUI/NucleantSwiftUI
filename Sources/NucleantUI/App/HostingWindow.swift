@@ -644,6 +644,14 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         #endif
     }
 
+    public func on_magnify(phase: TrackpadGesturePhase, delta: Double, x: Double, y: Double) {
+        MainActor.assumeIsolated { host.magnify(phase: phase, delta: delta, at: viewPoint(x: x, y: y)) }
+    }
+
+    public func on_rotate(phase: TrackpadGesturePhase, delta: Double, x: Double, y: Double) {
+        MainActor.assumeIsolated { host.rotate(phase: phase, delta: delta, at: viewPoint(x: x, y: y)) }
+    }
+
     public func on_touch_down(id: Int, x: Double, y: Double) {
         MainActor.assumeIsolated { host.pointerDown(id: id, at: viewPoint(x: x, y: y)) }
     }

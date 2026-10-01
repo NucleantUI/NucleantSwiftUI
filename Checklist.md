@@ -148,13 +148,13 @@
 ## Interaction
 - [x] .onTapGesture
 - [x] DragGesture / .gesture
-- [ ] TapGesture / LongPressGesture / MagnifyGesture / RotateGesture
-- [ ] .simultaneousGesture / .highPriorityGesture
+- [x] TapGesture / LongPressGesture / MagnifyGesture / RotateGesture
+- [x] .simultaneousGesture / .highPriorityGesture
 - [x] .onHover
 - [x] .disabled
 - [x] .draggable / .dropDestination / Transferable / UTType
-- [ ] .allowsHitTesting / .contentShape
-- [ ] .focused / .onSubmit / .onKeyPress
+- [x] .allowsHitTesting / .contentShape
+- [x] .focused / .onSubmit / .onKeyPress
 - [x] .onAppear
 - [x] .onDisappear
 

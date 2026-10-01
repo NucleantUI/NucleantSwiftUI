@@ -9,6 +9,7 @@
 
 import Foundation
 import Dispatch
+import NucleantWindow
 
 @MainActor
 public final class ViewHost {
@@ -155,12 +156,30 @@ public final class ViewHost {
     /// is clearly scrolling, as UIKit does.
     private static let scrollSlop = 10.0
 
+    /// The gestures attached with `.gesture` and its kin, and how they
+    /// compete with each other and with the presses above.
+    private let arena = GestureArena()
+
+    /// Keys down now, by key code — a key down for one already here is a
+    /// repeat.
+    private var heldKeys: Set<UInt16> = []
+
+    /// The write count of each focus state as the host last left it, so a
+    /// write from a view (`focused = .email`) can be told from the host's.
+    private var focusVersions: [ObjectIdentifier: UInt32] = [:]
+
     public init<Root: View>(root: Root) {
         self.root = AnyView(root)
         environment.menuPresenter = MenuPresenter { [weak self] items in
             self?.presentMenu(items)
         }
         environment.popoverPresenter = popoverPresenter
+        arena.cancelPress = { [weak self] pointer, point in
+            self?.cancelPress(pointer, at: point)
+        }
+        arena.didClaim = { [weak self] pointers in
+            self?.gestureClaimed(pointers)
+        }
     }
 
     // MARK: - Size
@@ -259,6 +278,12 @@ public final class ViewHost {
         // dirty — it does not re-enter this pass.
         for action in effects.endPass() {
             action()
+        }
+        if builds, let rootNode {
+            if !arena.isIdle {
+                arena.refreshAttachments(from: rootNode)
+            }
+            applyFocusRequests()
         }
         // Only a pass that built can have changed a preference: every value
         // is set by a view, not by layout.
@@ -477,9 +502,17 @@ public final class ViewHost {
                 }
             }
         }
-        guard let hit = rootNode?.hitTest(point, matching: { $0.handlesPointer }) else {
+        // The frontmost pointer target, as always — and the gestures
+        // attached around it, which compete for the press in the arena.
+        let chain = rootNode?.pressChain(at: point) ?? PressChain()
+        if !chain.gestures.isEmpty, id == primaryPointer, arena.timesHoldAhead(of: chain) {
+            // A long press gesture is what a held press means here.
+            contextMenuHit = nil
+        }
+        guard let hit = chain.press else {
             InputTrace.log("down \(id) \(point) — no target")
             gestures[id] = nil
+            arena.pointerDown(id, at: point, chain: chain, pressReports: false)
             return
         }
         InputTrace.log("down \(id) \(point) — hit \(hit.frame)")
@@ -495,6 +528,12 @@ public final class ViewHost {
         if gesture.passedThreshold {
             reportDrag(id: id, gesture: gesture, at: hit.localPoint, ended: false)
         }
+        arena.pointerDown(
+            id,
+            at: point,
+            chain: chain,
+            pressReports: gesture.passedThreshold && hit.target.takesDrags
+        )
     }
 
     public func pointerUp(id: Int = 0, at point: Point) {
@@ -508,6 +547,9 @@ public final class ViewHost {
                 return
             }
         }
+        // A gesture this release completes goes before the press — a tap
+        // gesture that wins lets the press go without its tap.
+        arena.pointerUp(id, at: point)
         guard let gesture = gestures.removeValue(forKey: id) else {
             InputTrace.log("up \(id) \(point) — no gesture in flight")
             return
@@ -519,15 +561,25 @@ public final class ViewHost {
             reportDrag(id: id, gesture: gesture, at: local, ended: true)
         }
         lastReleasedFrame = gesture.hit.frame
-        gesture.hit.target.onRelease?(local, inside)
-        if inside {
-            gesture.hit.target.onTap?(local)
+        // At once — or, behind a tap gesture still counting, once that is
+        // decided.
+        // A target with nothing to do on release — a drag that never moved,
+        // a press-only row — is no tap, and leaves the release to the
+        // gestures around it.
+        let target = gesture.hit.target
+        let takesRelease = target.onRelease != nil || target.onTap != nil
+        arena.pressReleased(id, inside: inside && takesRelease) { tapped in
+            target.onRelease?(local, tapped)
+            if tapped {
+                target.onTap?(local)
+            }
         }
     }
 
     /// The system took the pointer away (a system gesture, an incoming call):
     /// let its view go without a tap, and drop any drag preview on the floor.
     public func pointerCancelled(id: Int = 0, at point: Point) {
+        arena.cancelPointer(id)
         if id == primaryPointer {
             releasePrimary(at: point)
             if let session = dragSession {
@@ -561,7 +613,7 @@ public final class ViewHost {
         // A hovering mouse has no press in flight but still moves the
         // location that a scroll wheel event lands on — and the node under
         // it. A finger never arrives here without a press, so never hovers.
-        if primaryPointer == nil, gestures.isEmpty {
+        if primaryPointer == nil, gestures.isEmpty, !arena.follows(pointer: id) {
             pointerLocation = point
             updateHover(at: point)
             updateTextureHover(at: point)
@@ -580,7 +632,7 @@ public final class ViewHost {
                 scrollTarget?.target.onScroll?(Point(x: point.x - previous.x, y: point.y - previous.y))
                 return
             }
-            let takesDrags = gestures[id]?.hit.target.takesDrags ?? false
+            let takesDrags = (gestures[id]?.hit.target.takesDrags ?? false) || arena.followsDrags(of: id)
             if let scrollTarget, !takesDrags {
                 let dx = point.x - touchStart.x
                 let dy = point.y - touchStart.y
@@ -609,6 +661,8 @@ public final class ViewHost {
             }
         }
 
+        arena.pointerMoved(id, to: point)
+
         // Movement only means something to the gesture that is already in
         // flight: a drag must keep reporting to the view it started on, even
         // once the pointer has left that view's bounds.
@@ -623,6 +677,11 @@ public final class ViewHost {
             guard (dx * dx + dy * dy).squareRoot() >= threshold else { return }
             gesture.passedThreshold = true
             gestures[id] = gesture
+            if gesture.hit.target.takesDrags {
+                arena.pressReports(id)
+                // The arena may have handed the press to a gesture before it.
+                guard gestures[id] != nil else { return }
+            }
         }
         reportDrag(id: id, gesture: gesture, at: local, ended: false)
     }
@@ -643,8 +702,34 @@ public final class ViewHost {
     /// Let the view under the primary pointer go without a tap — the press
     /// turned out to be something else.
     private func releasePrimaryGesture() {
+        if let id = primaryPointer {
+            arena.pressDropped(id)
+            arena.cancelPointer(id)
+        }
         guard let id = primaryPointer, let gesture = gestures.removeValue(forKey: id) else { return }
         gesture.hit.target.onRelease?(gesture.hit.localPoint(for: pointerLocation) ?? gesture.hit.localPoint, false)
+    }
+
+    /// A gesture won the press on `pointer`: its view lets go without a
+    /// tap, as when the system takes a pointer away.
+    private func cancelPress(_ pointer: Int, at point: Point) {
+        guard let gesture = gestures.removeValue(forKey: pointer) else { return }
+        InputTrace.log("press \(pointer) taken by a gesture")
+        let local = gesture.hit.localPoint(for: point) ?? gesture.hit.localPoint
+        if gesture.passedThreshold {
+            reportDrag(id: pointer, gesture: gesture, at: local, ended: true)
+        }
+        gesture.hit.target.onRelease?(local, false)
+    }
+
+    /// A gesture that excludes others recognized on `pointers`: when one is
+    /// the primary pointer, the press is no longer a scroll, a drag of a
+    /// `.draggable` or a held context menu.
+    private func gestureClaimed(_ pointers: Set<Int>) {
+        guard let id = primaryPointer, pointers.contains(id) else { return }
+        scrollTarget = nil
+        dragSourceHit = nil
+        contextMenuHit = nil
     }
 
     private func beginDrag(from source: Hit<DragSource>) {
@@ -719,6 +804,7 @@ public final class ViewHost {
         }
         focusedPath = found?.path
         found?.onFocusChange(true)
+        syncFocusBindings()
     }
 
     /// The focused view's current target — `nil`, and the focus dropped,
@@ -737,6 +823,16 @@ public final class ViewHost {
     /// A key pressed, for the view that has the keys — or, for Tab, a move
     /// to the next tab stop when the focused view doesn't keep Tab itself.
     public func keyDown(keyCode: UInt16, characters: String?, modifiers: EventModifiers = []) {
+        let isRepeat = heldKeys.contains(keyCode)
+        // A key pressed with ⌘ never reports its release on macOS, so it is
+        // not counted as held — its next press is a press, not a repeat.
+        if modifiers.contains(.command) {
+            heldKeys.remove(keyCode)
+        } else {
+            heldKeys.insert(keyCode)
+        }
+        let press = KeyPress(phase: isRepeat ? .repeat : .down, keyCode: keyCode, characters: characters, modifiers: modifiers)
+        if offerKeyPress(press) { return }
         let focused = focusedTarget()
         if keyCode == 0x30, !modifiers.contains(.command), !modifiers.contains(.option) {
             // Nothing focused, a tab stop that passes Tab on, or ⌃Tab out of
@@ -768,11 +864,110 @@ public final class ViewHost {
         }
         focusedPath = target.path
         target.onFocusChange(true)
+        syncFocusBindings()
         return true
     }
 
     public func keyUp(keyCode: UInt16, characters: String?, modifiers: EventModifiers = []) {
+        heldKeys.remove(keyCode)
+        if offerKeyPress(KeyPress(phase: .up, keyCode: keyCode, characters: characters, modifiers: modifiers)) { return }
         focusedTarget()?.onKeyUp(KeyEvent(keyCode: keyCode, characters: characters, modifiers: modifiers))
+    }
+
+    /// Offer `press` to the `.onKeyPress` actions around the view that has
+    /// the keys, innermost first; whether one used it.
+    private func offerKeyPress(_ press: KeyPress) -> Bool {
+        guard focusedTarget() != nil, let path = focusedPath, let node = rootNode?.focusNode(at: path) else {
+            return false
+        }
+        for scope in node.focusScope {
+            if let handler = scope.content.keyPressHandler, handler.handle(press) { return true }
+        }
+        return false
+    }
+
+    // MARK: - Focus state
+
+    /// Give the keys to `target` — or take them away, for `nil` — and
+    /// bring the focus states up to date.
+    private func setFocus(_ target: FocusTarget?) {
+        guard target?.path != focusedPath else { return }
+        if let path = focusedPath {
+            rootNode?.focusTarget(at: path)?.onFocusChange(false)
+        }
+        focusedPath = target?.path
+        target?.onFocusChange(true)
+        syncFocusBindings()
+    }
+
+    /// Write every `@FocusState` marked in the tree to match where the keys
+    /// are: the mark around the focused view, for its state; empty, for a
+    /// state none of whose marks has them.
+    private func syncFocusBindings() {
+        guard let root = rootNode else { return }
+        var marks: [(record: FocusBindingRecord, node: ViewNode)] = []
+        root.focusBindings(into: &marks)
+        guard !marks.isEmpty else { return }
+
+        var holding: [ObjectIdentifier: FocusBindingRecord] = [:]
+        if let path = focusedPath, let node = root.focusNode(at: path) {
+            for scope in node.focusScope {
+                if let record = scope.content.focusBinding, holding[record.group] == nil {
+                    holding[record.group] = record
+                }
+            }
+        }
+        var done: Set<ObjectIdentifier> = []
+        for mark in marks where done.insert(mark.record.group).inserted {
+            let group = mark.record.group
+            if let record = holding[group] {
+                if !record.matches() { record.take() }
+            } else if marks.contains(where: { $0.record.group == group && $0.record.matches() }) {
+                mark.record.clear()
+            }
+            focusVersions[group] = mark.record.version()
+        }
+    }
+
+    /// After a build: a focus state a view set since the host last looked
+    /// moves the keys to the view it names — or, set empty, takes them from
+    /// the view that had them. A focused view that has left the tree gives
+    /// the keys up.
+    private func applyFocusRequests() {
+        guard let root = rootNode else { return }
+        if let path = focusedPath, root.focusTarget(at: path) == nil {
+            focusedPath = nil
+            syncFocusBindings()
+        }
+        var marks: [(record: FocusBindingRecord, node: ViewNode)] = []
+        root.focusBindings(into: &marks)
+        guard !marks.isEmpty else {
+            focusVersions.removeAll()
+            return
+        }
+
+        let focusedNode = focusedPath.flatMap { root.focusNode(at: $0) }
+        let focusedScope = focusedNode?.focusScope ?? []
+        var done: Set<ObjectIdentifier> = []
+        for mark in marks where done.insert(mark.record.group).inserted {
+            let group = mark.record.group
+            let version = mark.record.version()
+            let seen = focusVersions[group]
+            guard seen != version else { continue }
+            focusVersions[group] = version
+            let ofGroup = marks.filter { $0.record.group == group }
+            if let named = ofGroup.first(where: { $0.record.matches() }) {
+                // Already there — the keys are inside the named view.
+                guard !focusedScope.contains(where: { $0 === named.node }) else { continue }
+                if let target = named.node.firstFocusTarget() {
+                    setFocus(target)
+                }
+            } else if seen != nil, ofGroup.contains(where: { mark in focusedScope.contains { $0 === mark.node } }) {
+                setFocus(nil)
+            }
+        }
+        let standing = Set(marks.map(\.record.group))
+        focusVersions = focusVersions.filter { standing.contains($0.key) }
     }
 
     // MARK: - Editing commands
@@ -843,6 +1038,26 @@ public final class ViewHost {
         }
         InputTrace.log("scroll (\(dx), \(dy)) at \(pointerLocation)")
         hit.target.onScroll?(Point(x: dx, y: dy))
+    }
+
+    // MARK: - Trackpad gestures
+
+    /// A trackpad pinch at `point`: `delta` is the change in scale since
+    /// the last event, as AppKit reports it. Drives `MagnifyGesture`.
+    public func magnify(phase: TrackpadGesturePhase, delta: Double, at point: Point) {
+        pointerLocation = point
+        arena.trackpad(.magnify, phase: phase, delta: delta, at: point) {
+            rootNode?.pressChain(at: point) ?? PressChain()
+        }
+    }
+
+    /// A trackpad rotation at `point`: `delta` is degrees counterclockwise
+    /// since the last event, as AppKit reports it. Drives `RotateGesture`.
+    public func rotate(phase: TrackpadGesturePhase, delta: Double, at point: Point) {
+        pointerLocation = point
+        arena.trackpad(.rotate, phase: phase, delta: delta, at: point) {
+            rootNode?.pressChain(at: point) ?? PressChain()
+        }
     }
 }
 

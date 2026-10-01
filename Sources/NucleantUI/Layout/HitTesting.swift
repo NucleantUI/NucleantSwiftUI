@@ -92,9 +92,15 @@ extension ViewNode {
         // Off screen, whatever the frames left over from an earlier pass say
         // — or on its way out, drawn but no longer there.
         guard !content.isParked, removal == nil else { return nil }
+        // `.allowsHitTesting(false)`: nothing here can be hit.
+        guard content.allowsHitTesting else { return nil }
         // A clipping node's children only exist inside its frame.
         if content.clipsChildren {
             guard let local = mapIntoLocalSpace(point), frame.contains(local) else { return nil }
+        }
+        // Nor, under a `.contentShape`, outside the shape.
+        if let shape = content.hitShape {
+            guard let local = mapIntoLocalSpace(point), shape.contains(local, in: frame) else { return nil }
         }
         for child in (content.hitTestOrder(node: self) ?? children).reversed() {
             if let hit = child.hitTest(point, select: select) { return hit }
@@ -102,6 +108,7 @@ extension ViewNode {
 
         guard let value = select(self) else { return nil }
         guard let local = mapIntoLocalSpace(point), frame.contains(local) else { return nil }
+        guard wrappedContentAccepts(point) else { return nil }
         return Hit(
             value: value,
             node: self,
@@ -109,6 +116,25 @@ extension ViewNode {
             frame: frame,
             transform: transform
         )
+    }
+
+    /// Whether what this node wraps takes a hit at `point` — false when a
+    /// `.contentShape` below it leaves the point outside, or an
+    /// `.allowsHitTesting(false)` turns it off. Only the run of single-child
+    /// nodes is looked at: `Circle().contentShape(Circle()).onTapGesture`
+    /// is the tap's own content, a stack's children are not.
+    func wrappedContentAccepts(_ point: Point) -> Bool {
+        var probe = self
+        while true {
+            let inner = probe.layoutChildren
+            guard inner.count == 1 else { return true }
+            probe = inner[0]
+            if !probe.content.allowsHitTesting { return false }
+            if let shape = probe.content.hitShape {
+                guard let local = probe.mapIntoLocalSpace(point) else { return false }
+                return shape.contains(local, in: probe.frame)
+            }
+        }
     }
 
     /// `point` with this node's ambient transform undone — `nil` for a

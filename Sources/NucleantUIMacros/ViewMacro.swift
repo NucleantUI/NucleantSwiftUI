@@ -204,7 +204,9 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
     /// `func _isEquivalent(to:)` — one `_areEquivalent` per stored property.
     ///
     /// `@State` is skipped: it lives in the store, not the struct, and a
-    /// write to it dirties the owner directly. `@Environment` is skipped
+    /// write to it dirties the owner directly — and so are `@FocusState` and
+    /// a `@FocusState.Binding` to one, which keep their value in the same
+    /// store. `@Environment` is skipped
     /// because the environment is compared separately by the builder. A
     /// closure is skipped because two closures cannot be compared at all:
     /// rather than making the view "never equivalent" (and so rebuilt every
@@ -216,7 +218,7 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
         let checks = properties.compactMap { property -> String? in
             if property.isFunctionTyped { return nil }
             switch property.wrapper {
-            case "State", "Environment":
+            case "State", "Environment", "FocusState", "FocusState.Binding":
                 return nil
             case .some:
                 return "_areEquivalent(self._\(property.name), other._\(property.name))"
@@ -282,6 +284,12 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
             case "Environment":
                 // Initialised by its own attribute arguments.
                 continue
+            case "FocusState":
+                // Starts empty — `false` or `nil` — and is set from the body.
+                assignments.append("self._\(property.name) = FocusState()")
+            case "FocusState.Binding":
+                parameters.append("\(property.name): FocusState<\(type)>.Binding")
+                assignments.append("self._\(property.name) = \(property.name)")
             case .some(let other):
                 // An unknown wrapper: take the wrapped value if it has no
                 // initializer of its own, the same bet the compiler makes.

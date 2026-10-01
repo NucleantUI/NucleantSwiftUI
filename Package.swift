@@ -138,6 +138,10 @@ let package = Package(
             name: "NucleantUIDemo",
             dependencies: ["NucleantUI"]
         ),
+        .testTarget(
+            name: "NucleantUITests",
+            dependencies: ["NucleantUI"]
+        ),
         .executableTarget(
             name: "ExperimentalUITests",
             dependencies: ["NucleantUI", .product(name: "NucleantThorVG", package: "NucleantThorVG")]

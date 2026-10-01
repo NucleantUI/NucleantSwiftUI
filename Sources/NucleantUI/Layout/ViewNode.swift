@@ -237,6 +237,25 @@ protocol NodeContent {
     /// Takes the keys once pressed — a `TextField`, a `TextureView`.
     var focusTarget: FocusTarget? { get }
 
+    /// A gesture attached with `.gesture` and its kin, run by the host's
+    /// `GestureArena` for a press inside this node.
+    var gestureAttachment: GestureAttachment? { get }
+
+    /// False for `.allowsHitTesting(false)`: neither this node nor anything
+    /// under it is found by any hit test.
+    var allowsHitTesting: Bool { get }
+
+    /// The shape a press must land inside to reach this node and what it
+    /// wraps (`.contentShape`), in place of its frame.
+    var hitShape: HitShape? { get }
+
+    /// A `.focused` binding, kept in step with where the keys are.
+    var focusBinding: FocusBindingRecord? { get }
+
+    /// An `.onKeyPress` action, offered the keys while this node or one
+    /// inside it has them.
+    var keyPressHandler: KeyPressHandler? { get }
+
     /// The transition this node gives the view it wraps (`.transition`).
     var transitionTrait: AnyTransition? { get }
 
@@ -277,6 +296,11 @@ extension NodeContent {
     var hoverTarget: HoverTarget? { nil }
     var textureInput: TextureInputTarget? { nil }
     var focusTarget: FocusTarget? { nil }
+    var gestureAttachment: GestureAttachment? { nil }
+    var allowsHitTesting: Bool { true }
+    var hitShape: HitShape? { nil }
+    var focusBinding: FocusBindingRecord? { nil }
+    var keyPressHandler: KeyPressHandler? { nil }
     var transitionTrait: AnyTransition? { nil }
     var animatesSize: Bool { true }
     var isParked: Bool { false }
