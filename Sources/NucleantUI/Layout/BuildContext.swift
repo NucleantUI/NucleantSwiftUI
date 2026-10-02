@@ -102,8 +102,8 @@ public struct BuildContext {
 
     /// Bind every `@State` / `@Environment` on `view` before its `body` runs.
     /// Returns the keys bound, so the view's record can release them when the
-    /// view goes away. The view does the walking — statically if `@View`
-    /// generated it, by reflection otherwise.
+    /// view goes away. The view does the walking, through what `@View`
+    /// generated.
     func bindDynamicProperties<V: View>(of view: V) -> [StateKey] {
         let binder = DynamicPropertyBinder(
             store: store,

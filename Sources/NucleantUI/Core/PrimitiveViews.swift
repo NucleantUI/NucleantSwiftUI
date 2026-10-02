@@ -11,7 +11,7 @@
 import NucleantWindow
 
 /// A view that displays nothing.
-public struct EmptyView: View {
+public struct EmptyView: View, Equatable {
     public init() {}
     public var body: Never { bodyUnavailable() }
 }

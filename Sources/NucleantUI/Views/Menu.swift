@@ -45,9 +45,10 @@ public struct Menu<Label: View, Content: View>: View {
     @State private var isPressed = false
     @State private var isHovered = false
 
-    public init(@ViewBuilder content: () -> Content, @ViewBuilder label: () -> Label) {
+    public init(@ViewBuilder content: () -> Content, _viewID: ViewID = #viewID, @ViewBuilder label: () -> Label) {
         self.content = content()
         self.label = label()
+        self._viewID = _viewID
     }
 
     public var body: some View {

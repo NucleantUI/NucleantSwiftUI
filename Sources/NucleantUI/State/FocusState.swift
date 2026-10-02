@@ -38,8 +38,8 @@
 @MainActor
 public struct FocusState<Value: Hashable>: DynamicProperty {
 
-    /// The one reference that survives `Mirror`'s copy of the wrapper, as
-    /// `@State`'s does.
+    /// The one reference every copy of the wrapper shares, as `@State`'s
+    /// does.
     final class Holder {
         var storage: StateStorage<Value>?
         /// What the value is while no marked view has the keys.

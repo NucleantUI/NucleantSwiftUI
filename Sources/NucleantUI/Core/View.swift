@@ -19,10 +19,8 @@ public protocol View: ViewInput {
     @ViewBuilder @MainActor @preconcurrency var body: Body { get }
 
     // The three things the builder needs from a view besides its body. `@View`
-    // generates all of them from the struct's declaration; a plain
-    // `struct S: View` gets the defaults below, which work the same way but
-    // through reflection. The builder calls these directly — there is no
-    // separate fast path and slow path, only cheap witnesses and dear ones.
+    // generates all of them from the struct's declaration; only primitives
+    // (`Body == Never`) get defaults, below. The builder calls these directly.
 
     /// Where this view was written. Settable because the call site is
     /// stamped from outside: `@ViewBuilder` sees every view expression in a
@@ -41,39 +39,20 @@ extension View {
         get { .unknown }
         set {}
     }
-
-    /// Reflection: walk the stored properties for wrappers. `Mirror` hands
-    /// back *copies* of the wrappers, which is fine — each holds a reference
-    /// to its own holder object, and that reference is what the copy shares
-    /// with the original. Types that turn out to have nothing are remembered,
-    /// so the walk is paid once per type rather than once per build.
-    public func _bindDynamicProperties(_ binder: DynamicPropertyBinder) {
-        let type = ObjectIdentifier(Self.self)
-        if _ReflectiveBinding.typesWithoutDynamicProperties.contains(type) { return }
-        var found = false
-        var index = 0
-        for child in Mirror(reflecting: self).children {
-            defer { index += 1 }
-            guard let property = child.value as? DynamicProperty else { continue }
-            found = true
-            binder.bind(property, index: index)
-        }
-        if !found {
-            _ReflectiveBinding.typesWithoutDynamicProperties.insert(type)
-        }
-    }
-
-    /// Runtime equivalence — `Equatable` if the type is, a field walk
-    /// otherwise. `@View` replaces it with a field-by-field function that
-    /// needs neither cast nor `Mirror`.
-    public func _isEquivalent(to other: Self) -> Bool {
-        _equatableOrStructurallyEquivalent(self, other)
-    }
 }
 
-@MainActor
-enum _ReflectiveBinding {
-    static var typesWithoutDynamicProperties: Set<ObjectIdentifier> = []
+/// A primitive — `Body == Never`, drawn by the framework — holds no
+/// `@State` or other dynamic property, and compares by `Equatable` when it
+/// is that, else as never equivalent. A view with a body has no default: it
+/// gets both from `@View`, and without `@View` it does not compile.
+extension View where Body == Never {
+    public func _bindDynamicProperties(_ binder: DynamicPropertyBinder) {}
+
+    public func _isEquivalent(to other: Self) -> Bool { false }
+}
+
+extension View where Body == Never, Self: Equatable {
+    public func _isEquivalent(to other: Self) -> Bool { self == other }
 }
 
 // MARK: - Never as a View

@@ -325,8 +325,7 @@ extension BuildContext {
     }
 }
 
-/// View types known to have nothing animatable — asked once per type, like
-/// `_ReflectiveBinding` remembers types without dynamic properties.
+/// View types known to have nothing animatable — asked once per type.
 @MainActor
 enum _AnimatableTypes {
     static var inanimate: Set<ObjectIdentifier> = []

@@ -16,10 +16,10 @@
 
 /// A type whose values can be compared for equivalence as view inputs.
 ///
-/// Every `View` is one (`@View` generates the witness, the protocol default
-/// reflects); property wrappers and a few framework types conform by hand.
-/// Anything else falls back to `Equatable` where available and to a
-/// structural walk otherwise.
+/// Every `View` is one (`@View` generates the witness; a primitive without
+/// one compares by `Equatable`); property wrappers and a few framework types
+/// conform by hand. Anything else falls back to `Equatable` where available
+/// and is otherwise not equivalent — there is no reflection.
 @MainActor
 public protocol ViewInput {
     func _isEquivalent(to other: Self) -> Bool
@@ -70,17 +70,12 @@ func _dynamicallyEquivalent(_ a: Any, _ b: Any) -> Bool {
     if type(of: a) is AnyClass {
         return (a as AnyObject) === (b as AnyObject)
     }
-    return _equatableOrStructurallyEquivalent(a, b)
-}
-
-/// The part after `ViewInput` — what a `View` without a generated witness
-/// falls back to. Kept separate so that default cannot call itself.
-@MainActor
-func _equatableOrStructurallyEquivalent(_ a: Any, _ b: Any) -> Bool {
+    // Nothing that says how to compare it: undecidable, so not equivalent.
+    // A type that should compare declares `Equatable`.
     if let a = a as? any Equatable {
         return _openEquatable(a, b)
     }
-    return _structurallyEquivalent(a, b)
+    return false
 }
 
 @MainActor
@@ -92,36 +87,6 @@ private func _openViewInput<T: ViewInput>(_ a: T, _ b: Any) -> Bool {
 private func _openEquatable<T: Equatable>(_ a: T, _ b: Any) -> Bool {
     guard let b = b as? T else { return false }
     return a == b
-}
-
-/// Field-by-field through `Mirror`, for plain structs, tuples, optionals and
-/// collections that declare nothing. Stops at the first difference.
-///
-/// What it refuses to decide: closures (nothing to compare) and enums
-/// without payloads — their `Mirror` is empty, so two different cases would
-/// look identical. Classes never reach here; they are compared by identity
-/// above.
-@MainActor
-private func _structurallyEquivalent(_ a: Any, _ b: Any) -> Bool {
-    let ma = Mirror(reflecting: a)
-    let mb = Mirror(reflecting: b)
-    switch ma.displayStyle {
-    case .struct, .tuple, .optional, .collection, .set:
-        guard ma.children.count == mb.children.count else { return false }
-        for (x, y) in zip(ma.children, mb.children) {
-            guard _dynamicallyEquivalent(x.value, y.value) else { return false }
-        }
-        return true
-    case .enum:
-        // A payload case shows as one child labelled with the case name; a
-        // bare case shows nothing at all, and is left to `Equatable`.
-        guard let x = ma.children.first, let y = mb.children.first, x.label == y.label else {
-            return false
-        }
-        return _dynamicallyEquivalent(x.value, y.value)
-    default:
-        return false
-    }
 }
 
 // MARK: - Property wrappers
@@ -196,21 +161,10 @@ extension Optional where Wrapped: View {
     }
 }
 
-extension ModifiedContent {
-    public func _isEquivalent(to other: ModifiedContent<Content, Modifier>) -> Bool {
-        _areEquivalent(content, other.content) && _areEquivalent(modifier, other.modifier)
-    }
-}
-
-// The rest carry closures, so there is nothing to compare — and saying so
-// outright is cheaper than having `Mirror` discover it.
+// The rest carry closures, so there is nothing to compare.
 
 extension AnyView {
     public func _isEquivalent(to other: AnyView) -> Bool { false }
-}
-
-extension _ViewModifier_Content {
-    public func _isEquivalent(to other: _ViewModifier_Content<Modifier>) -> Bool { false }
 }
 
 extension ForEach {
