@@ -169,7 +169,7 @@ extension _ViewArray {
     }
 }
 
-extension _ConditionalContent {
+extension _ConditionalContent where TrueContent: View, FalseContent: View {
     public func _isEquivalent(to other: _ConditionalContent<TrueContent, FalseContent>) -> Bool {
         switch (storage, other.storage) {
         case (.trueContent(let a), .trueContent(let b)):

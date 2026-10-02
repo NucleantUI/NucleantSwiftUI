@@ -270,7 +270,7 @@ extension _ViewArray: ListContentSource {
     }
 }
 
-extension _ConditionalContent: ListContentSource {
+extension _ConditionalContent: ListContentSource where TrueContent: View, FalseContent: View {
     func _listItems<SelectionValue: Hashable>(into walk: inout ListWalk<SelectionValue>) {
         switch storage {
         case .trueContent(let content): walk.child(0) { listItems(of: content, into: &$0) }
