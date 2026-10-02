@@ -13,14 +13,14 @@ import Foundation
 /// way (`ThorCanvas` is ThorVG whatever this says); text is measured through
 /// ThorVG in both.
 ///
-/// `NUCLEANT_SKIA_MODE=1|0` in the environment wins; otherwise the default
-/// below. (SwiftPM caches the evaluated manifest, but re-evaluates it when
-/// the environment it read changes.)
+/// Skia by default; ThorVG stays for `ThorCanvas`. `NUCLEANT_SKIA_MODE=1|0`
+/// in the environment wins. (SwiftPM caches the evaluated manifest, but
+/// re-evaluates it when the environment it read changes.)
 let skiaMode: Bool = {
     if let flag = ProcessInfo.processInfo.environment["NUCLEANT_SKIA_MODE"] {
         return ["1", "true", "yes"].contains(flag.lowercased())
     }
-    return false
+    return true
 }()
 
 // MARK: - Dependency source

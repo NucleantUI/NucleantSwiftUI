@@ -27,7 +27,8 @@ extension RenderNodeManager {
         let node: SkiaShaderNode<NucleantRenderNode>
         let container: NucleantRenderNode
         let renderer: SkiaDisplayRenderer
-        /// Pixel size of the image — the frame rounded up to whole granules.
+        /// Pixel size of the image — the frame rounded up to whole granules,
+        /// and kept while the frame fits with under two granules spare.
         var width: Int
         var height: Int
         /// What the canvas holds, and for a `.shader` layer the origin it
@@ -136,13 +137,22 @@ extension RenderNodeManager {
         // MARK: By view
 
         /// The node standing for `key`, resized if its frame outgrew the
-        /// image (or shrank a granule), taken from the pool or built if there
-        /// is none. Composited into its frame.
+        /// image (or left two granules of it spare), taken from the pool or
+        /// built if there is none. Composited into its frame.
         func canvasNode(for key: RenderNodeKey, rect: Rect) -> SkiaCanvasNode? {
             let size = manager.imageSize(for: rect)
             if let existing = nodes[key] {
                 existing.used = true
-                guard existing.width != size.width || existing.height != size.height else {
+                // An image a little bigger than the frame is kept — the
+                // scissor cuts what it draws past the frame — so a frame
+                // animating through sizes doesn't reallocate at every granule
+                // edge it crosses. Never past the window, though: the
+                // composite drops a viewport wider than the swapchain.
+                let slack = 2 * RenderNodeManager.granule
+                let cap = manager.imageSize(for: Rect(origin: .zero, size: manager.windowSize))
+                if size.width <= existing.width, size.height <= existing.height,
+                   existing.width - size.width < slack, existing.height - size.height < slack,
+                   existing.width <= cap.width, existing.height <= cap.height {
                     return existing
                 }
                 // A new surface holds nothing — the list is drawn again.

@@ -61,7 +61,8 @@ final class RenderNodeManager {
         /// The canvas as a `ThorCanvas` view's closures see it.
         let thorContext: ThorContext
         /// Pixel size of the image — the frame rounded up to whole granules,
-        /// so a frame that jitters by a few points keeps its image.
+        /// and kept while the frame fits with under two granules spare, so a
+        /// frame that jitters or animates keeps its image.
         var width: Int
         var height: Int
         /// What the canvas holds: node-local for a drawing group, absolute for
@@ -340,13 +341,22 @@ final class RenderNodeManager {
     // MARK: - Canvas nodes: by view, pool, build, retire, free
 
     /// The canvas node standing for `key`, resized if its frame outgrew the
-    /// image (or shrank a granule), taken from the pool or built if there
-    /// is none. Composited into its frame.
+    /// image (or left two granules of it spare), taken from the pool or
+    /// built if there is none. Composited into its frame.
     func canvasNode(for key: RenderNodeKey, rect: Rect) -> CanvasNode? {
         let size = imageSize(for: rect)
         if let existing = nodes[key] {
             existing.used = true
-            guard existing.width != size.width || existing.height != size.height else {
+            // An image a little bigger than the frame is kept — the scissor
+            // cuts what it draws past the frame — so a frame animating through
+            // sizes doesn't reallocate at every granule edge it crosses. Never
+            // past the window, though: the composite drops a viewport wider
+            // than the swapchain.
+            let slack = 2 * Self.granule
+            let cap = imageSize(for: Rect(origin: .zero, size: windowSize))
+            if size.width <= existing.width, size.height <= existing.height,
+               existing.width - size.width < slack, existing.height - size.height < slack,
+               existing.width <= cap.width, existing.height <= cap.height {
                 return existing
             }
             // Same node, new image — the canvas keeps its paints, so an
