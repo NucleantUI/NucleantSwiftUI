@@ -38,10 +38,12 @@ struct NavigationScreen: Identifiable, Equatable {
 }
 
 /// What a `NavigationStack` keeps across builds for its descendants to write
-/// into: the destinations `.navigationDestination(for:)` registered and the
-/// titles `.navigationTitle` set. A child can't hand a value *up* the tree —
-/// there is no preference system — so it reaches this through the router in
-/// the environment instead. One per stack, held in the stack's `@State`.
+/// into: the destinations `.navigationDestination(for:)` registered, the
+/// titles `.navigationTitle` set and the bar visibilities
+/// `.toolbarVisibility(_:for:)` set. A child reaches this through the router
+/// in the environment rather than handing values up as preferences: those
+/// are delivered only after the pass that built them, too late for the bar
+/// built in that same pass. One per stack, held in the stack's `@State`.
 @MainActor
 @Observable
 final class NavigationStackStorage {
@@ -53,10 +55,14 @@ final class NavigationStackStorage {
     @ObservationIgnored
     private var titles: [NavigationScreenID: String] = [:]
 
+    @ObservationIgnored
+    private var barVisibilities: [NavigationScreenID: Visibility] = [:]
+
     /// The one observed property. The bar reads it, so a screen setting a
-    /// new title rebuilds the bar and nothing else; dropping the titles of
-    /// screens that are gone doesn't bump it, since none of them is showing.
-    private var titlesVersion = 0
+    /// new title or hiding the bar rebuilds the bar and nothing else;
+    /// dropping what screens that are gone set doesn't bump it, since none
+    /// of them is showing.
+    private var barVersion = 0
 
     func register<D: Hashable>(_ type: D.Type, _ destination: @escaping (D) -> AnyView) {
         destinations[ObjectIdentifier(D.self)] = { value in
@@ -69,19 +75,36 @@ final class NavigationStackStorage {
     }
 
     func title(for screen: NavigationScreenID) -> String? {
-        _ = titlesVersion
+        _ = barVersion
         return titles[screen]
     }
 
     func setTitle(_ title: String, for screen: NavigationScreenID) {
         guard titles[screen] != title else { return }
         titles[screen] = title
-        titlesVersion &+= 1
+        barVersion &+= 1
     }
 
-    func retainTitles(for screens: Set<NavigationScreenID>) {
-        guard titles.keys.contains(where: { !screens.contains($0) }) else { return }
-        titles = titles.filter { screens.contains($0.key) }
+    /// `.automatic` for a screen that never said.
+    func barVisibility(for screen: NavigationScreenID) -> Visibility {
+        _ = barVersion
+        return barVisibilities[screen] ?? .automatic
+    }
+
+    func setBarVisibility(_ visibility: Visibility, for screen: NavigationScreenID) {
+        guard (barVisibilities[screen] ?? .automatic) != visibility else { return }
+        barVisibilities[screen] = visibility
+        barVersion &+= 1
+    }
+
+    /// Forgets what screens no longer on the stack set.
+    func retain(_ screens: Set<NavigationScreenID>) {
+        if titles.keys.contains(where: { !screens.contains($0) }) {
+            titles = titles.filter { screens.contains($0.key) }
+        }
+        if barVisibilities.keys.contains(where: { !screens.contains($0) }) {
+            barVisibilities = barVisibilities.filter { screens.contains($0.key) }
+        }
     }
 }
 
@@ -228,6 +251,11 @@ extension EnvironmentValues {
 /// `path` binding) and resolved through `.navigationDestination(for:)`, or
 /// pushed as a view by a `NavigationLink` that carries its destination.
 ///
+/// A screen hides the bar with `.toolbarVisibility(.hidden, for:
+/// .navigationBar)` and gets the stack's whole height. The back button goes
+/// with the bar, so a screen that hides it pops itself, through
+/// `navigationRouter`.
+///
 /// Two additions to SwiftUI's shape: the root's title can be given to the
 /// stack (`NavigationStack("Library") { … }`), and a destination link's
 /// `title:` names the screen it pushes. `.navigationTitle` on a screen
@@ -260,31 +288,33 @@ public struct NavigationStack<Data, Root: View>: View {
         )
         let screens = router.screens
         let top = screens.last
-        let _ = storage.retainTitles(for: Set(screens.map(\.id) + [.root]))
+        let _ = storage.retain(Set(screens.map(\.id) + [.root]))
 
-        // Every screen stays in the tree; only the top one is on screen.
-        // A covered screen is parked — never laid out, drawn or hit
-        // tested, and its shader slots are released — but it keeps its
-        // identity, so its `@State` and scroll position are still there
-        // on the way back. A screen that left the tree would lose them
-        // at once, the way any departed view does.
-        ZStack {
-            root
-                .environment(\.navigationScreen, .root)
-                ._parked(top != nil)
-            ForEach(screens) { screen in
-                NavigationScreenView(screen: screen, storage: storage)
-                    ._parked(screen.id != top?.id)
+        // The screens first and the bar second, so the bar is built *after*
+        // them: a screen's `.navigationTitle` and `.toolbarVisibility` are
+        // filed while the screen builds, and the bar reads them in the same
+        // pass. The layout then puts the bar on top and the screens below
+        // it, inset by however tall the bar came out — nothing at all when
+        // the top screen hid it.
+        NavigationStackLayout {
+            // Every screen stays in the tree; only the top one is on screen.
+            // A covered screen is parked — never laid out, drawn or hit
+            // tested, and its shader slots are released — but it keeps its
+            // identity, so its `@State` and scroll position are still there
+            // on the way back. A screen that left the tree would lose them
+            // at once, the way any departed view does.
+            ZStack {
+                root
+                    .environment(\.navigationScreen, .root)
+                    ._parked(top != nil)
+                ForEach(screens) { screen in
+                    NavigationScreenView(screen: screen, storage: storage)
+                        ._parked(screen.id != top?.id)
+                }
             }
-        }
-        // The stack takes everything offered, bar or no bar — the bar is an
-        // overlay and has no say in the size.
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.top, NavigationBar.height)
-        // An overlay rather than the first row of a VStack, so it is built
-        // *after* the screens: a screen's `.navigationTitle` is filed while
-        // the screen builds, and the bar then reads it in the same pass.
-        .overlay(alignment: .top) {
+            // The stack takes everything offered, bar or no bar.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
             NavigationBar(
                 screen: top?.id ?? .root,
                 fallbackTitle: fallbackTitle(for: top),
@@ -360,6 +390,43 @@ private struct NavigationScreenView {
     }
 }
 
+/// A stack's two parts, in build order: its screens, then its bar. The bar
+/// goes across the top at the height it chose — none when hidden — and the
+/// screens take the rest.
+private struct NavigationStackLayout: Layout {
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> Size {
+        guard let screens = subviews.first else { return .zero }
+        let bar = barHeight(subviews, width: proposal.width)
+        let size = screens.sizeThatFits(ProposedViewSize(
+            width: proposal.width,
+            height: proposal.height.map { max($0 - bar, 0) }
+        ))
+        return Size(width: size.width, height: size.height + bar)
+    }
+
+    func placeSubviews(in bounds: Rect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let screens = subviews.first else { return }
+        let bar = barHeight(subviews, width: bounds.width)
+        screens.place(
+            at: Point(x: bounds.minX, y: bounds.minY + bar),
+            proposal: ProposedViewSize(width: bounds.width, height: max(bounds.height - bar, 0))
+        )
+        if subviews.count > 1 {
+            subviews[1].place(
+                at: Point(x: bounds.minX, y: bounds.minY),
+                proposal: ProposedViewSize(width: bounds.width, height: bar)
+            )
+        }
+    }
+
+    /// A hidden bar builds nothing, so it measures — or counts — as none.
+    private func barHeight(_ subviews: Subviews, width: Double?) -> Double {
+        guard subviews.count > 1 else { return 0 }
+        return subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+    }
+}
+
 @View
 private struct NavigationBar {
     static let height: Double = 44
@@ -371,30 +438,34 @@ private struct NavigationBar {
     let storage: NavigationStackStorage
 
     var body: some View {
-        HStack(spacing: 12) {
-            if showsBack {
-                Text("‹ Back")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.blue)
-                    .padding(horizontal: 10, vertical: 6)
-                    .onTapGesture { router.pop() }
+        // `.automatic` is shown: a stack's bar is there unless a screen
+        // hides it.
+        if storage.barVisibility(for: screen) != .hidden {
+            HStack(spacing: 12) {
+                if showsBack {
+                    Text("‹ Back")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.blue)
+                        .padding(horizontal: 10, vertical: 6)
+                        .onTapGesture { router.pop() }
+                }
+
+                Text(storage.title(for: screen) ?? fallbackTitle ?? "")
+                    .font(.system(size: 17, weight: .semibold))
+                    // One line, truncated — a title bar that reflows its own
+                    // height as the window narrows is not a title bar, and a
+                    // long title would otherwise push the content down.
+                    .lineLimit(1)
+
+                Spacer()
             }
-
-            Text(storage.title(for: screen) ?? fallbackTitle ?? "")
-                .font(.system(size: 17, weight: .semibold))
-                // One line, truncated — a title bar that reflows its own
-                // height as the window narrows is not a title bar, and a long
-                // title would otherwise push the content down.
-                .lineLimit(1)
-
-            Spacer()
-        }
-        .padding(horizontal: 12, vertical: 0)
-        // A fixed height: the screens are inset by exactly this much.
-        .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height)
-        .background(Color.secondaryBackground)
-        .overlay(alignment: .bottom) {
-            Color.separator.frame(height: 1)
+            .padding(horizontal: 12, vertical: 0)
+            // A fixed height: the screens are inset by exactly this much.
+            .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height)
+            .background(Color.secondaryBackground)
+            .overlay(alignment: .bottom) {
+                Color.separator.frame(height: 1)
+            }
         }
     }
 }
