@@ -463,6 +463,10 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
     /// a display-link tick that arrives meanwhile is dropped, not stacked.
     private var isFramePending = false
 
+    /// The Δt the queued frame runs with: every tick's since the last frame
+    /// ran, so a dropped tick's time is not lost with it.
+    private var pendingDelta = 0.0
+
     /// Per display-link tick: queue one frame on the main dispatch queue.
     ///
     /// Not drawn here, in the display link's own callback. A frame blocks
@@ -490,13 +494,16 @@ public final class HostingWindow: NucleantWindow, @unchecked Sendable {
         }
         #else
         MainActor.assumeIsolated {
+            pendingDelta += dt
             guard !isFramePending else { return }
             isFramePending = true
             DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.isFramePending = false
-                    self.renderFrame(dt)
+                    let delta = self.pendingDelta
+                    self.pendingDelta = 0
+                    self.renderFrame(delta)
                 }
             }
         }
