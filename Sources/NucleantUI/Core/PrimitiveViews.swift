@@ -164,6 +164,7 @@ extension AnyView: BuiltinView {
 /// the host is presenting — popovers, a context menu. Two fixed slots, so
 /// the root keeps its path (`[0]`) whether or not anything is over it, and
 /// a presentation coming and going only rebuilds slot `[1]`.
+@View
 struct _HostRoot: View {
     let content: AnyView
     let overlay: AnyView?
@@ -189,6 +190,7 @@ final class OverlayCapture {
 
 /// Slot `[1]`: the open popovers, and over them the context menu if one is
 /// open — a menu opened from a popover's content sits above it.
+@View
 struct _HostOverlay: View {
     let popovers: PopoverPresenter
     let contextMenu: ContextMenuOverlay?

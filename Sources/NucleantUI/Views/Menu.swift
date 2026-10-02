@@ -26,6 +26,7 @@
 /// and closes when the pointer moves onto another row of the panel it
 /// hangs off. The dropdown form opens its items under the control,
 /// dismissed like any menu.
+@View
 public struct Menu<Label: View, Content: View>: View {
 
     let content: Content

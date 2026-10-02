@@ -9,6 +9,7 @@
 /// Button("Increment") { count += 1 }
 /// Button(action: reset) { Label() }
 /// ```
+@View
 public struct Button<Label: View>: View {
 
     let action: () -> Void

@@ -153,6 +153,7 @@ extension EnvironmentValues {
 /// What `ViewHost` puts over the tree while a menu is open: a scrim that
 /// closes it on any press, the panel of items at the anchor, and a panel
 /// for each open submenu beside the row it hangs off.
+@View
 struct ContextMenuOverlay: View {
     let anchor: Point
     let controller: ContextMenuController
@@ -184,6 +185,7 @@ struct ContextMenuOverlay: View {
 }
 
 /// The items in a column, on a panel.
+@View
 struct ContextMenuPanel: View {
     let items: AnyView
     let level: Int

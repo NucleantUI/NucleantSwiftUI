@@ -4,6 +4,25 @@ import PackageDescription
 import CompilerPluginSupport
 import Foundation
 
+// MARK: - Primary renderer
+
+/// Which display renderer draws the views' display list — the window
+/// canvas, `.drawingGroup()`, the per-view painter and the `.shader`
+/// layers. `false`: `ThorDisplayRenderer`. `true`: `SkiaDisplayRenderer`,
+/// compiled in as `SKIA_MODE`. Both backends' nodes are always there either
+/// way (`ThorCanvas` is ThorVG whatever this says); text is measured through
+/// ThorVG in both.
+///
+/// `NUCLEANT_SKIA_MODE=1|0` in the environment wins; otherwise the default
+/// below. (SwiftPM caches the evaluated manifest, but re-evaluates it when
+/// the environment it read changes.)
+let skiaMode: Bool = {
+    if let flag = ProcessInfo.processInfo.environment["NUCLEANT_SKIA_MODE"] {
+        return ["1", "true", "yes"].contains(flag.lowercased())
+    }
+    return false
+}()
+
 // MARK: - Dependency source
 
 /// Build against the sibling checkouts (`../NucleantVulkan` etc.) or against
@@ -75,6 +94,9 @@ func nucleantDependencies() -> [Package.Dependency] {
     let repos = [
         ("NucleantVulkan", "master"), ("NucleantThorVG", "master"),
         ("NucleantApplication", "master"), ("PyShader", "main"),
+        // The Skia display renderer's API is on NucleantSkia's `android`
+        // branch, not yet on its `master`.
+        ("NucleantSkia", "android"),
     ]
     return repos.map { name, branch in
         localDev
@@ -82,6 +104,18 @@ func nucleantDependencies() -> [Package.Dependency] {
             : .package(url: "https://github.com/NucleantUI/\(name).git", branch: branch)
     }
 }
+
+/// The layout / input / perf traces (`LayoutTrace`, `InputTrace`,
+/// `PerfTrace`) are compiled in only with `NUCLEANT_TRACE=1` in the
+/// environment; each is then switched on by its own variable at run time.
+/// Left out, nothing of them is checked or counted on a frame.
+let traceBuild = ["1", "true", "yes"].contains(
+    (ProcessInfo.processInfo.environment["NUCLEANT_TRACE"] ?? "").lowercased()
+)
+
+/// `#if SKIA_MODE` / `#if NUCLEANT_TRACE` in the framework and its tests.
+let skiaModeSettings: [SwiftSetting] = (skiaMode ? [.define("SKIA_MODE")] : [])
+    + (traceBuild ? [.define("NUCLEANT_TRACE")] : [])
 
 let package = Package(
     name: "NucleantUI",
@@ -123,11 +157,13 @@ let package = Package(
                 .product(name: "NucleantThorVG", package: "NucleantThorVG"),
                 .product(name: "NucleantApplication", package: "NucleantApplication"),
                 .product(name: "NucleantWindow", package: "NucleantApplication"),
+                .product(name: "NucleantSkia", package: "NucleantSkia"),
             ] + platformProviders(),
             // The default faces (Roboto, Roboto Mono) travel with the library,
             // so text looks the same on every platform and never depends on
             // what fonts the OS happens to ship — see FontRegistry.
-            resources: [.copy("Resources/Fonts")]
+            resources: [.copy("Resources/Fonts")],
+            swiftSettings: skiaModeSettings
         ),
         // Audio file loading and playback. Stands on its own — no NucleantUI
         // dependency — so an app, or NucleantDSP later, can use it without the
@@ -140,7 +176,8 @@ let package = Package(
         ),
         .testTarget(
             name: "NucleantUITests",
-            dependencies: ["NucleantUI"]
+            dependencies: ["NucleantUI", .product(name: "NucleantSkia", package: "NucleantSkia")],
+            swiftSettings: skiaModeSettings
         ),
         .executableTarget(
             name: "ExperimentalUITests",

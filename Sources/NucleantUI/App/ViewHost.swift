@@ -33,9 +33,15 @@ public final class ViewHost {
 
     /// Where the display list goes. `nil` until the window's ThorVG node
     /// exists, which is after the first `on_size` on some platforms.
+    #if SKIA_MODE
+    public var renderer: SkiaDisplayRenderer? {
+        didSet { needsWindowRedraw = true }
+    }
+    #else
     public var renderer: ThorDisplayRenderer? {
         didSet { needsWindowRedraw = true }
     }
+    #endif
 
     /// GPU slots for `Shader` views — and the per-view render nodes — if the
     /// window has an engine yet.
@@ -196,12 +202,18 @@ public final class ViewHost {
 
     // MARK: - The frame tick
 
+    /// Whether the last `update()` laid the tree out and placed it — the
+    /// one thing that moves, reorders or retires render nodes. A frame with
+    /// no pass and no node to render has nothing new to composite.
+    public private(set) var didRunPass = false
+
     /// Rebuild and repaint if anything asked for it. Returns true when the
     /// window canvas was redrawn, so the window knows to mark its render
     /// node dirty — false when nothing changed, and also when what changed
     /// landed entirely in per-view render nodes, which mark themselves.
     @discardableResult
     public func update() -> Bool {
+        didRunPass = false
         // One instant for the whole frame: everything placed in it is
         // sampled at the same time.
         AnimationStore.current = animations
@@ -223,13 +235,14 @@ public final class ViewHost {
         guard size.width > 0, size.height > 0 else { return false }
         needsFullRebuild = false
         needsRepaint = false
+        didRunPass = true
 
         let builds = full || !work.paths.isEmpty
         animations.beginPass(transaction: builds ? work.transaction : nil, isCommit: builds)
         let transaction = work.transaction ?? Transaction()
 
         let started = PerfTrace.isEnabled ? DispatchTime.now().uptimeNanoseconds : 0
-        PerfTrace.reset()
+        if PerfTrace.isEnabled { PerfTrace.reset() }
 
         // What actually happened, not what was planned — a scoped attempt may
         // fall back, and a trace that reported the plan would hide exactly the
@@ -1062,11 +1075,21 @@ public final class ViewHost {
 }
 
 
+// The three traces below exist only in a build made with `NUCLEANT_TRACE=1`
+// in the environment (Package.swift defines `NUCLEANT_TRACE`); each is then
+// switched on at run time by its own variable. In any other build their
+// switches are the constant `false`, and every site guarded by one compiles
+// away — nothing is checked or counted on a frame.
+
 /// Opt-in dump of the placed display list, on when
 /// `NUCLEANT_SWIFTUI_TRACE_LAYOUT` is set. The fastest way to tell a layout bug
 /// from a rendering one: these are the exact rects handed to the renderer.
 enum LayoutTrace {
+    #if NUCLEANT_TRACE
     nonisolated(unsafe) static let isEnabled = ProcessInfo.processInfo.environment["NUCLEANT_SWIFTUI_TRACE_LAYOUT"] != nil
+    #else
+    static let isEnabled = false
+    #endif
 
     static func dump(_ list: DisplayList) {
         for (index, command) in list.commands.enumerated() {
@@ -1098,7 +1121,11 @@ enum LayoutTrace {
 /// Writes to stderr because Swift's `print` is fully buffered off a terminal —
 /// the reason a crashed or killed run appears to say nothing at all.
 enum InputTrace {
+    #if NUCLEANT_TRACE
     static let isEnabled = ProcessInfo.processInfo.environment["NUCLEANT_SWIFTUI_TRACE_INPUT"] != nil
+    #else
+    static let isEnabled = false
+    #endif
 
     static func log(_ message: @autoclosure () -> String) {
         guard isEnabled else { return }
@@ -1118,11 +1145,16 @@ enum InputTrace {
 /// numbers climb with every pass means something is defeating a cache.
 @MainActor
 enum PerfTrace {
+    #if NUCLEANT_TRACE
     static let isEnabled = ProcessInfo.processInfo.environment["NUCLEANT_SWIFTUI_TRACE_PERF"] != nil
 
     /// `NUCLEANT_SWIFTUI_TRACE_PERF=2` also names every view built or reused,
     /// with its path — the way to find out *why* a subtree is not being kept.
     static let isVerbose = ProcessInfo.processInfo.environment["NUCLEANT_SWIFTUI_TRACE_PERF"] == "2"
+    #else
+    static let isEnabled = false
+    static let isVerbose = false
+    #endif
 
     static func trace(_ message: @autoclosure () -> String) {
         guard isVerbose else { return }

@@ -91,6 +91,7 @@ public struct FormStyleConfiguration {
 
     /// The form's content — as written, when a style places it; row by
     /// row, when a style of the framework's lays it out.
+    @View
     public struct Content: View {
         let builder: FormContentBuilder
 

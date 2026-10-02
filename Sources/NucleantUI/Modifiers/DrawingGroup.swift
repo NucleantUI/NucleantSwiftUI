@@ -82,7 +82,11 @@ struct DrawingGroupContent: NodeContent {
             visible = rect.intersection(clip.map { $0.intersection(window) } ?? window)
             guard visible.width > 0, visible.height > 0 else { return }
         }
+        #if SKIA_MODE
+        guard let node = host.renderNodes.skia.canvasNode(for: key, rect: visible) else { return }
+        #else
         guard let node = host.renderNodes.canvasNode(for: key, rect: visible) else { return }
+        #endif
         node.place(rect: visible, clip: clip, scale: host.renderNodes.scale)
         host.renderNodes.composite(node.container, at: host.renderNodes.nextPaintOrder())
         host.boundaries.noteNested(at: list.commands.count, rect: clip.map { visible.intersection($0) } ?? visible)

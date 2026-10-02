@@ -47,6 +47,9 @@ public enum FontRegistry {
     /// Explicit registrations: our family name → file path.
     private static var registeredPaths: [String: String] = [:]
 
+    /// Every face ThorVG accepted: family name → the file it came from.
+    private static var loadedPaths: [String: String] = [:]
+
     /// Where the built-in designs come from, in preference order. The bundled
     /// faces (`bundledFaces`) lead: they are in the library's resource bundle
     /// on every platform, so the default look never depends on what the OS
@@ -120,6 +123,12 @@ public enum FontRegistry {
         let resolved = search(key)
         resolutions[key] = resolved
         return resolved
+    }
+
+    /// The file behind a name `resolve` returned — for a renderer other than
+    /// ThorVG, which loads the face itself.
+    static func path(ofResolved family: String) -> String? {
+        loadedPaths[family]
     }
 
     private static func search(_ key: ResolutionKey) -> String? {
@@ -268,6 +277,7 @@ public enum FontRegistry {
         )
         guard result == TVG_RESULT_SUCCESS else { return false }
         loaded.insert(family)
+        loadedPaths[family] = path
         return true
     }
 }

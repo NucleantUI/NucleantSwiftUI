@@ -156,7 +156,11 @@ final class ShaderSlotRegistry {
     /// node that is never composited — `content` and `origin` are what it
     /// holds and where the view was when it was drawn; an identical list at
     /// the same place is not drawn again.
+    #if SKIA_MODE
+    typealias Layer = RenderNodeManager.SkiaCanvasNode
+    #else
     typealias Layer = RenderNodeManager.CanvasNode
+    #endif
 
     private unowned let engine: NucleantRenderEngine
 
@@ -263,7 +267,7 @@ final class ShaderSlotRegistry {
         // and is drawn again at its new place; the canvas transform absorbs
         // the origin, but the comparison does not.
         guard layer.content != content || layer.origin != slot.pixelOrigin else { return }
-        PerfTrace.layersDrawn += 1
+        if PerfTrace.isEnabled { PerfTrace.layersDrawn += 1 }
         layer.renderer.render(content, origin: slot.pixelOrigin, flipHeight: slot.height)
         layer.content = content
         layer.origin = slot.pixelOrigin
@@ -466,6 +470,12 @@ final class ShaderSlotRegistry {
         for slot in slots.values {
             slot.elapsed += delta
             slot.frame += 1
+            if slot.isAnimated {
+                slot.container.needsRender = true
+            }
+            // The uniforms matter only to a dispatch: an animated slot's,
+            // or a static one's first or re-armed one.
+            guard slot.container.needsRender else { continue }
             // One pointer for every shader, in window pixels: two shaders
             // side by side read the same value and stay in step with each
             // other, which per-view coordinates never did.
@@ -486,9 +496,6 @@ final class ShaderSlotRegistry {
                 mouseClickX: Float(local.x),
                 mouseClickY: Float(local.y)
             ))
-            if slot.isAnimated {
-                slot.container.needsRender = true
-            }
         }
         return true
     }
@@ -664,7 +671,12 @@ final class ShaderSlotRegistry {
     /// rather than rebuilt: the canvas keeps its renderer, gets a new image
     /// at the new size, and its slot keeps its identity in the engine.
     private func makeLayer(width: Int, height: Int, reusing handed: Layer?) -> Layer? {
-        guard let layer = renderNodes.acquire(width: width, height: height, reusing: handed) else {
+        #if SKIA_MODE
+        let acquired = renderNodes.skia.acquire(width: width, height: height, reusing: handed)
+        #else
+        let acquired = renderNodes.acquire(width: width, height: height, reusing: handed)
+        #endif
+        guard let layer = acquired else {
             return nil
         }
         layer.container.compositesToWindow = false
@@ -722,7 +734,11 @@ final class ShaderSlotRegistry {
     /// Hand a canvas that is no longer in use back to the shared pool,
     /// emptied of its paints; past the pool's limit it is freed.
     private func recycle(_ layer: Layer) {
+        #if SKIA_MODE
+        renderNodes.skia.recycle(layer)
+        #else
         renderNodes.recycle(layer)
+        #endif
     }
 
     /// The image a slot's shader writes and the composite samples.

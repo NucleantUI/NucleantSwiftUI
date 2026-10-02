@@ -216,7 +216,3 @@ extension _ViewModifier_Content {
 extension ForEach {
     public func _isEquivalent(to other: ForEach<Data, ID, Content>) -> Bool { false }
 }
-
-extension Button {
-    public func _isEquivalent(to other: Button<Label>) -> Bool { false }
-}

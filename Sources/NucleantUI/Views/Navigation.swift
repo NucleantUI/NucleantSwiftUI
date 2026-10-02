@@ -133,17 +133,16 @@ public final class NavigationRouter {
         let path = self.path.wrappedValue
         let pushed = self.pushed.wrappedValue
         var screens: [NavigationScreen] = []
-
-        func appendPushed(at depth: Int) {
+        // Depth 0 is the root; depth k the k-th path value. Each depth's
+        // value first, then the views pushed on top of it.
+        for depth in 0...path.elements.count {
+            if depth > 0 {
+                let element = path.elements[depth - 1]
+                screens.append(NavigationScreen(id: .value(index: depth - 1, element), content: .value(element)))
+            }
             for view in pushed where view.depth == depth && view.stands(on: path) {
                 screens.append(NavigationScreen(id: .view(view.id), content: .view(title: view.title, view.content)))
             }
-        }
-
-        appendPushed(at: 0)
-        for (index, element) in path.elements.enumerated() {
-            screens.append(NavigationScreen(id: .value(index: index, element), content: .value(element)))
-            appendPushed(at: index + 1)
         }
         return screens
     }

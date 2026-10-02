@@ -96,7 +96,7 @@ final class ViewNode {
     init(content: any NodeContent, children: [ViewNode] = []) {
         self.content = content
         self.children = children
-        PerfTrace.nodesBuilt += 1
+        if PerfTrace.isEnabled { PerfTrace.nodesBuilt += 1 }
         for (index, child) in children.enumerated() {
             child.parent = self
             child.indexInParent = index
@@ -158,7 +158,7 @@ final class ViewNode {
 
     func sizeThatFits(_ proposal: ProposedSize) -> Size {
         if let cached = measurements[proposal] { return cached }
-        PerfTrace.sizeCalls += 1
+        if PerfTrace.isEnabled { PerfTrace.sizeCalls += 1 }
         let size = content.sizeThatFits(proposal, node: self)
         if measurements.count >= 16 { measurements.removeAll(keepingCapacity: true) }
         measurements[proposal] = size
@@ -388,30 +388,29 @@ func buildNode<V: View>(_ view: V, _ context: inout BuildContext) -> ViewNode {
 
     if let candidate = context.records.candidate(at: path) {
         let standing = candidate.entry
-        let reason: String?
-        if standing.identity != identity {
-            reason = "identity"
-        } else if standing.stackAxis != context.stackAxis {
-            reason = "stack axis"
-        } else if standing.lazyKey != lazyKey {
-            reason = "lazy window"
-        } else if context.isDirty(under: path) {
-            reason = "dirty"
-        } else if !standing.environment._isEquivalent(to: context.environment) {
-            reason = "environment"
-        } else if !standing.isEquivalent(view) {
-            reason = "inputs"
-        } else {
-            reason = nil
-        }
-        if reason == nil {
+        let reusable = standing.identity == identity
+            && standing.stackAxis == context.stackAxis
+            && standing.lazyKey == lazyKey
+            && !context.isDirty(under: path)
+            && standing.environment._isEquivalent(to: context.environment)
+            && standing.isEquivalent(view)
+        if reusable {
             context.records.reuse(candidate, at: path)
             lazyCursor?.position += standing.lazyUnits
-            PerfTrace.nodesReused += 1
+            if PerfTrace.isEnabled { PerfTrace.nodesReused += 1 }
             PerfTrace.trace("reuse \(path) \(V.self)")
             return standing.node
         }
-        PerfTrace.trace("build \(path) \(V.self) — \(reason!)")
+        // Which check failed, worked out again only for the verbose trace.
+        PerfTrace.trace({
+            let reason = standing.identity != identity ? "identity"
+                : standing.stackAxis != context.stackAxis ? "stack axis"
+                : standing.lazyKey != lazyKey ? "lazy window"
+                : context.isDirty(under: path) ? "dirty"
+                : !standing.environment._isEquivalent(to: context.environment) ? "environment"
+                : "inputs"
+            return "build \(path) \(V.self) — \(reason)"
+        }())
 
         // A fresh build replaces what stood here. Its reader registrations
         // are stale from this moment — the reads are about to happen again —

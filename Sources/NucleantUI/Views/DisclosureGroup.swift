@@ -150,6 +150,7 @@ public protocol DisclosureGroupStyle {
 public struct DisclosureGroupStyleConfiguration {
 
     /// The group's label.
+    @View
     public struct Label: View {
         let build: @MainActor (inout BuildContext) -> ViewNode
 
@@ -161,6 +162,7 @@ public struct DisclosureGroupStyleConfiguration {
     }
 
     /// The group's content. Only built if the style places it.
+    @View
     public struct Content: View {
         let build: @MainActor (inout BuildContext) -> ViewNode
 
