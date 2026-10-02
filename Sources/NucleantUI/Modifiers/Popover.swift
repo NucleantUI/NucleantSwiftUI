@@ -45,6 +45,7 @@ extension View {
 /// `.popover(isPresented:content:)`: keeps the host's list of open popovers
 /// in step with the binding, and records the anchor's frame for the panel
 /// to hang off.
+@View
 struct PopoverModifier<Content: View>: View {
     let content: Content
     let isPresented: Binding<Bool>
@@ -169,6 +170,7 @@ extension EnvironmentValues {
 /// What `ViewHost` puts over the tree while popovers are open: a scrim
 /// that closes the innermost on any press, and each popover's panel
 /// placed around the view it hangs off.
+@View
 struct PopoverOverlay: View {
     let presenter: PopoverPresenter
 
@@ -191,6 +193,7 @@ struct PopoverOverlay: View {
 }
 
 /// The content on a panel.
+@View
 struct PopoverPanel: View {
     let content: AnyView
 

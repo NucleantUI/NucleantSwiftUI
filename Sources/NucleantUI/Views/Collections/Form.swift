@@ -91,11 +91,13 @@ public struct FormStyleConfiguration {
 
     /// The form's content — as written, when a style places it; row by
     /// row, when a style of the framework's lays it out.
+    @View
     public struct Content: View {
         let builder: FormContentBuilder
 
-        init(_ builder: FormContentBuilder) {
+        init(_ builder: FormContentBuilder, _viewID: ViewID = #viewID) {
             self.builder = builder
+            self._viewID = _viewID
         }
 
         public var body: Never { bodyUnavailable() }

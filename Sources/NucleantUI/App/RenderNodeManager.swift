@@ -26,6 +26,7 @@
 import NucleantVulkan
 import NucleantThorVG
 import Dispatch
+import CVulkan
 
 /// What a per-view node is keyed by: where the view stands, which view it is
 /// (type and stamped call site), and — when the author asked to start over —
@@ -60,7 +61,8 @@ final class RenderNodeManager {
         /// The canvas as a `ThorCanvas` view's closures see it.
         let thorContext: ThorContext
         /// Pixel size of the image — the frame rounded up to whole granules,
-        /// so a frame that jitters by a few points keeps its image.
+        /// and kept while the frame fits with under two granules spare, so a
+        /// frame that jitters or animates keeps its image.
         var width: Int
         var height: Int
         /// What the canvas holds: node-local for a drawing group, absolute for
@@ -133,7 +135,7 @@ final class RenderNodeManager {
         /// holds — for the engine to rasterize at the frame.
         func render(_ list: DisplayList, at path: [Int]) {
             guard content != list else { return }
-            PerfTrace.nodesDrawn += 1
+            if PerfTrace.isEnabled { PerfTrace.nodesDrawn += 1 }
             PerfTrace.trace("node \(width)x\(height) at \(path): \(list.commands.count) commands drawn")
             renderer.render(list)
             content = list
@@ -146,7 +148,7 @@ final class RenderNodeManager {
         /// told changed, and `draw` alone is not guaranteed to ask.
         func rasterize() {
             _ = thorContext.update()
-            PerfTrace.nodesDrawn += 1
+            if PerfTrace.isEnabled { PerfTrace.nodesDrawn += 1 }
             node.dirty = true
             container.needsRender = true
         }
@@ -185,6 +187,10 @@ final class RenderNodeManager {
 
     private unowned let engine: NucleantRenderEngine
 
+    /// The Skia canvas nodes — with `SKIA_MODE`, those of `.drawingGroup()`,
+    /// the `.shader` layers and the painter.
+    private(set) lazy var skia = SkiaCanvasNodes(engine: engine, manager: self)
+
     /// The canvas nodes standing, by the identity of the view that owns
     /// each; and the image nodes, by the view (and run) each holds.
     private var nodes: [RenderNodeKey: CanvasNode] = [:]
@@ -194,6 +200,7 @@ final class RenderNodeManager {
     var scale: Double = 1 {
         didSet {
             for node in nodes.values { node.renderer.scale = scale }
+            skia.scale = scale
         }
     }
 
@@ -240,6 +247,7 @@ final class RenderNodeManager {
         self.windowSize = windowSize
         for node in nodes.values { node.used = false }
         for entry in images.values { entry.used = false }
+        skia.beginPass()
         paintOrders.removeAll(keepingCapacity: true)
         paintCounter = 0
     }
@@ -269,6 +277,7 @@ final class RenderNodeManager {
             retire(entry)
             images[key] = nil
         }
+        skia.retireUnused()
     }
 
     /// Put the engine's list in this pass's paint order: the window canvas
@@ -332,13 +341,22 @@ final class RenderNodeManager {
     // MARK: - Canvas nodes: by view, pool, build, retire, free
 
     /// The canvas node standing for `key`, resized if its frame outgrew the
-    /// image (or shrank a granule), taken from the pool or built if there
-    /// is none. Composited into its frame.
+    /// image (or left two granules of it spare), taken from the pool or
+    /// built if there is none. Composited into its frame.
     func canvasNode(for key: RenderNodeKey, rect: Rect) -> CanvasNode? {
         let size = imageSize(for: rect)
         if let existing = nodes[key] {
             existing.used = true
-            guard existing.width != size.width || existing.height != size.height else {
+            // An image a little bigger than the frame is kept — the scissor
+            // cuts what it draws past the frame — so a frame animating through
+            // sizes doesn't reallocate at every granule edge it crosses. Never
+            // past the window, though: the composite drops a viewport wider
+            // than the swapchain.
+            let slack = 2 * Self.granule
+            let cap = imageSize(for: Rect(origin: .zero, size: windowSize))
+            if size.width <= existing.width, size.height <= existing.height,
+               existing.width - size.width < slack, existing.height - size.height < slack,
+               existing.width <= cap.width, existing.height <= cap.height {
                 return existing
             }
             // Same node, new image — the canvas keeps its paints, so an
@@ -432,6 +450,7 @@ final class RenderNodeManager {
     /// top of a frame, before anything is recorded; a node that is freed
     /// drains the device itself, one that is pooled needs no drain.
     func releasePending() {
+        skia.releasePending()
         guard !pendingDestroy.isEmpty || !pendingDestroyImages.isEmpty else { return }
         let retired = pendingDestroy
         let retiredImages = pendingDestroyImages
@@ -470,6 +489,7 @@ final class RenderNodeManager {
     }
 
     func destroyAll() {
+        skia.destroyAll()
         for node in nodes.values { retire(node) }
         nodes.removeAll()
         for entry in images.values { retire(entry) }
@@ -517,7 +537,16 @@ final class RenderNodeManager {
         }
         let node: ImageNode<NucleantRenderNode>
         do {
+            #if SKIA_MODE
+            // Copied out of a Skia painter, whose image is RGBA and read as
+            // RGBA — the copy is bytes, so this one is the same.
+            node = try engine.makeImageNode(
+                width: width, height: height,
+                format: VK_FORMAT_R8G8B8A8_UNORM, viewFormat: VK_FORMAT_R8G8B8A8_UNORM
+            )
+            #else
             node = try engine.makeImageNode(width: width, height: height)
+            #endif
         } catch {
             nucleantFlushStandardOutput()
             nucleantLogError("NucleantUI: image node (\(width)x\(height)) failed: \(error)\n")

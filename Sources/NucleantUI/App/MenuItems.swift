@@ -97,7 +97,7 @@ extension _ViewArray: MenuItemSource {
     }
 }
 
-extension _ConditionalContent: MenuItemSource {
+extension _ConditionalContent: MenuItemSource where TrueContent: View, FalseContent: View {
     func _menuItems(_ lowering: inout MenuLowering) -> [MenuBar.Item] {
         switch storage {
         case .trueContent(let content): return menuItems(of: content, &lowering)

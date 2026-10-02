@@ -9,6 +9,7 @@
 /// Button("Increment") { count += 1 }
 /// Button(action: reset) { Label() }
 /// ```
+@View
 public struct Button<Label: View>: View {
 
     let action: () -> Void
@@ -21,9 +22,10 @@ public struct Button<Label: View>: View {
     @State private var isPressed = false
     @State private var isHovered = false
 
-    public init(action: @escaping () -> Void, @ViewBuilder label: () -> Label) {
+    public init(action: @escaping () -> Void, _viewID: ViewID = #viewID, @ViewBuilder label: () -> Label) {
         self.action = action
         self.label = label()
+        self._viewID = _viewID
     }
 
     public var body: some View {

@@ -34,7 +34,7 @@ enum TextMeasurer {
     private static var lineMetrics: [FaceKey: (ascent: Double, descent: Double, lineHeight: Double)] = [:]
 
     private static func key(for font: Font) -> FaceKey {
-        PerfTrace.textMeasures += 1
+        if PerfTrace.isEnabled { PerfTrace.textMeasures += 1 }
         return FaceKey(family: FontRegistry.resolve(font), size: font.size, italic: font.isItalic)
     }
 
@@ -154,6 +154,9 @@ enum TextMeasurer {
         let key = SizeKey(string: string, font: font, proposal: proposal, lineLimit: lineLimit)
         if let cached = sizes[key] { return cached }
         let measured = measure(key)
+        // A miss only: a long-running app showing ever-new strings (a
+        // clock, a counter) would otherwise keep every one it ever showed.
+        if sizes.count >= 4096 { sizes.removeAll(keepingCapacity: true) }
         sizes[key] = measured
         return measured
     }

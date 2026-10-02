@@ -271,7 +271,7 @@ extension _ViewArray: PickerContentSource {
     }
 }
 
-extension _ConditionalContent: PickerContentSource {
+extension _ConditionalContent: PickerContentSource where TrueContent: View, FalseContent: View {
     func _pickerEntries<SelectionValue: Hashable>(
         into entries: inout [PickerEntry<SelectionValue>],
         implicitTag: SelectionValue?

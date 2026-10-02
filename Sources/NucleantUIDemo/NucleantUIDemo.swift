@@ -658,10 +658,6 @@ struct ContentView {
                     Spacer()
                 }
             }
-
-            Text("NucleantUI \(NucleantUI.version)")
-                .font(.footnote)
-                .foregroundColor(.secondary)
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

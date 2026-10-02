@@ -13,12 +13,16 @@
 import CVulkan
 import NucleantVulkan
 import NucleantThorVG
+import NucleantSkia
 
 public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable {
 
     public enum Context: RenderNodeContext {
         /// The window-filling 2D canvas every view draws into.
         case thor(ThorShaderNode<NucleantRenderNode>)
+        /// A Skia canvas. With `SKIA_MODE` it is the one every view draws
+        /// into, as `.thor` is otherwise.
+        case skia(SkiaShaderNode<NucleantRenderNode>)
         /// One `Shader` view's own compute-written image, composited into the
         /// view's rect. A vector canvas can't run a fragment shader, so these
         /// get their own slot rather than sharing the canvas.
@@ -73,6 +77,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         switch context {
         case .thor(let node):
             observe(node)
+        case .skia(let node):
+            observe(node)
         case .shader(let node):
             observe(node)
         case .vertexShader(let node):
@@ -88,6 +94,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         guard needsRender else { return }
         switch context {
         case .thor(let node):
+            node.update(engine, slot: self, cmd: cmd)
+        case .skia(let node):
             node.update(engine, slot: self, cmd: cmd)
         case .shader(let node):
             node.update(engine, slot: self, cmd: cmd)
@@ -115,6 +123,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         switch context {
         case .thor(let node):
             node.destroyResources(engine)
+        case .skia(let node):
+            node.destroyResources(engine)
         case .shader(let node):
             node.destroyResources(engine)
         case .vertexShader(let node):
@@ -130,6 +140,8 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         guard compositesToWindow else { return nil }
         switch context {
         case .thor(let node):
+            return node.imageView
+        case .skia(let node):
             return node.imageView
         case .shader(let node):
             return node.imageView
@@ -150,6 +162,10 @@ public final class NucleantRenderNode: RenderContainerNode, @unchecked Sendable 
         switch context {
         case .thor(let node) where compositesToWindow && compositeRect == nil:
             engine.resizeThorNode(node, id: id, width: width, height: height)
+        case .skia(let node) where compositesToWindow && compositeRect == nil:
+            engine.resizeSkiaNode(node, id: id, width: width, height: height)
+        case .skia:
+            break
         case .thor, .shader, .vertexShader, .image, .externalTexture:
             break
         }

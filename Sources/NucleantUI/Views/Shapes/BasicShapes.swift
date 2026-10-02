@@ -118,12 +118,18 @@ extension Capsule: BuiltinView {
 
 /// A caller-supplied path, built in the view's own coordinate space (origin at
 /// the frame's top-left) and moved into place by the framework.
+@View
 public struct PathShape: Shape {
     let build: (Size) -> Path
 
-    public init(_ build: @escaping (Size) -> Path) {
+    public init(_ build: @escaping (Size) -> Path, _viewID: ViewID = #viewID) {
         self.build = build
+        self._viewID = _viewID
     }
+
+    /// The closure is the whole shape, and two closures can't be compared:
+    /// never equivalent, so a new one always draws.
+    public func _isEquivalent(to other: PathShape) -> Bool { false }
 
     public func path(in rect: Rect) -> Path {
         build(rect.size).offsetBy(dx: rect.minX, dy: rect.minY)

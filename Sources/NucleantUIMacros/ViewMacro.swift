@@ -76,7 +76,8 @@ func sourceHash(_ text: String) -> Int {
 /// A stored closure is left out of `_isEquivalent(to:)`: there is nothing
 /// to compare two closures by, and a view whose only difference is a closure
 /// is treated as unchanged — see `Core/ViewID.swift` for what that asks of
-/// the closure.
+/// the closure. A struct that writes its own `_isEquivalent(to:)` — one whose
+/// closure *is* its content — keeps it, and none is generated.
 public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
 
     // MARK: Extension
@@ -173,7 +174,12 @@ public struct ViewMacro: ExtensionMacro, MemberMacro, MemberAttributeMacro {
         // expansion is worse still: it sees the expansion buffer.)
         members.append("\(raw: access)var _viewID: ViewID = .unknown")
 
-        members.append(equivalenceFunction(access: access, properties: properties))
+        let declaresEquivalence = structDecl.memberBlock.members.contains {
+            $0.decl.as(FunctionDeclSyntax.self)?.name.text == "_isEquivalent"
+        }
+        if !declaresEquivalence {
+            members.append(equivalenceFunction(access: access, properties: properties))
+        }
         members.append(bindingFunction(access: access, properties: properties))
 
         let initializers = structDecl.memberBlock.members.compactMap {

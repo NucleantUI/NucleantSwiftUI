@@ -58,11 +58,12 @@ public macro viewID() -> ViewID = #externalMacro(module: "NucleantUIMacros", typ
 /// ```
 ///
 /// Generates, from the struct's own declaration, the three members the
-/// builder asks every `View` for — the ones a plain `struct S: View` falls
-/// back to reflection for:
+/// builder asks every `View` with a body for — such a view without `@View`
+/// does not compile:
 ///
-/// * `_viewID`, stored, so `@ViewBuilder` can stamp the call site on it;
-/// * `_bindDynamicProperties`, listing the wrappers statically — no `Mirror`;
+/// * `_viewID`, stored: the call site its init saw, or — for an init that
+///   could not see one — the `@ViewBuilder` expression it was written in;
+/// * `_bindDynamicProperties`, listing the wrappers statically;
 /// * `_isEquivalent(to:)`, comparing every stored property that is an
 ///   *input* (`@State` is owned rather than received, and `@Environment` is
 ///   compared by the builder separately, so both are left out) with the

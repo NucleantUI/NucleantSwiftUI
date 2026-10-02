@@ -84,7 +84,7 @@ extension TupleView: LazyPassThrough {}
 extension Group: LazyPassThrough {}
 extension EmptyView: LazyPassThrough {}
 extension _ViewArray: LazyPassThrough {}
-extension _ConditionalContent: LazyPassThrough {}
+extension _ConditionalContent: LazyPassThrough where TrueContent: View, FalseContent: View {}
 extension Optional: LazyPassThrough where Wrapped: View {}
 extension AnyView: LazyPassThrough {}
 extension ForEach: LazyPassThrough {}

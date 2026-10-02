@@ -69,25 +69,54 @@ public struct EmptyCommands: Commands {
 }
 
 /// Several commands produced by one `@CommandsBuilder` block.
-public struct _TupleCommands: Commands {
-    let commands: [any Commands]
+public struct TupleCommands<each Content: Commands>: Commands {
+    public let value: (repeat each Content)
 
-    public init(_ commands: [any Commands]) {
-        self.commands = commands
+    public init(_ value: (repeat each Content)) {
+        self.value = (repeat each value)
     }
 
     public var body: Never { fatalError() }
 
     public func _lower(into menuBar: MenuBar) {
-        for commands in commands {
+        for commands in repeat (each value) {
             commands._lower(into: menuBar)
         }
     }
 }
 
+/// `Optional` is a set of commands when its wrapped type is — a bare `if`
+/// in a builder.
+extension Optional: Commands where Wrapped: Commands {
+    public var body: Never { fatalError() }
+
+    public func _lower(into menuBar: MenuBar) {
+        self?._lower(into: menuBar)
+    }
+}
+
+/// One branch of an `if`/`else` in a `@CommandsBuilder`.
+extension _ConditionalContent: Commands where TrueContent: Commands, FalseContent: Commands {
+    public var body: Never { fatalError() }
+
+    public func _lower(into menuBar: MenuBar) {
+        switch storage {
+        case .trueContent(let commands): commands._lower(into: menuBar)
+        case .falseContent(let commands): commands._lower(into: menuBar)
+        }
+    }
+}
+
+/// Constructs commands from closures. Multi-statement blocks become a
+/// `TupleCommands`; `if`/`else` becomes `_ConditionalContent`; a bare `if`
+/// becomes an `Optional`.
 @resultBuilder
 @MainActor
 public struct CommandsBuilder {
+    public static func buildExpression<Content: Commands>(_ content: Content) -> Content {
+        content
+    }
+
     public static func buildBlock() -> EmptyCommands {
         EmptyCommands()
     }
@@ -96,31 +125,28 @@ public struct CommandsBuilder {
         content
     }
 
+    /// Everything past one child. Parameter packs cover any arity.
     @_disfavoredOverload
     public static func buildBlock<each Content: Commands>(
         _ content: repeat each Content
-    ) -> _TupleCommands {
-        var collected: [any Commands] = []
-        for commands in repeat (each content) {
-            collected.append(commands)
-        }
-        return _TupleCommands(collected)
+    ) -> TupleCommands<repeat each Content> {
+        TupleCommands((repeat each content))
     }
 
-    public static func buildOptional<Content: Commands>(_ content: Content?) -> _TupleCommands {
-        _TupleCommands(content.map { [$0] } ?? [])
+    public static func buildIf<Content: Commands>(_ content: Content?) -> Content? {
+        content
     }
 
-    public static func buildEither<Content: Commands>(first: Content) -> _TupleCommands {
-        _TupleCommands([first])
+    public static func buildEither<TrueContent: Commands, FalseContent: Commands>(
+        first: TrueContent
+    ) -> _ConditionalContent<TrueContent, FalseContent> {
+        .init(storage: .trueContent(first))
     }
 
-    public static func buildEither<Content: Commands>(second: Content) -> _TupleCommands {
-        _TupleCommands([second])
-    }
-
-    public static func buildArray<Content: Commands>(_ components: [Content]) -> _TupleCommands {
-        _TupleCommands(components)
+    public static func buildEither<TrueContent: Commands, FalseContent: Commands>(
+        second: FalseContent
+    ) -> _ConditionalContent<TrueContent, FalseContent> {
+        .init(storage: .falseContent(second))
     }
 }
 
@@ -186,20 +212,22 @@ extension Scene {
     /// Adds menus and menu items to the app's menu bar. Every scene's
     /// commands are collected into the one bar, in scene order.
     public func commands<Content: Commands>(@CommandsBuilder content: () -> Content) -> some Scene {
-        _CommandsScene(base: self, commands: content())
+        CommandsScene(base: self, commands: content())
     }
 }
 
 /// `.commands(content:)`: the scene it wraps, plus commands.
-public struct _CommandsScene<Base: Scene, Content: Commands>: Scene {
+struct CommandsScene<Base: Scene, Content: Commands>: Scene {
     let base: Base
     let commands: Content
 
-    public func _makeWindows() -> [HostingWindow] {
+    var body: Never { fatalError() }
+
+    func _makeWindows() -> [HostingWindow] {
         base._makeWindows()
     }
 
-    public func _lowerCommands(into menuBar: MenuBar) {
+    func _lowerCommands(into menuBar: MenuBar) {
         base._lowerCommands(into: menuBar)
         commands._lower(into: menuBar)
     }

@@ -9,8 +9,8 @@
 ///
 /// Views are structs rebuilt from scratch on every pass, so a property wrapper
 /// can't carry state in its own stored fields. Each wrapper instead holds a
-/// small reference *holder*, which survives being copied out of a `Mirror`;
-/// binding writes into that holder, and `wrappedValue` reads back through it.
+/// small reference *holder*, which every copy of the view shares; binding
+/// writes into that holder, and `wrappedValue` reads back through it.
 @MainActor
 public protocol DynamicProperty {
     func _bind(to context: BindingContext)
@@ -35,8 +35,7 @@ public struct BindingContext {
 ///
 /// `@View`'s generated `_bindDynamicProperties` calls `bind` once per wrapped
 /// property, with the property's ordinal among the struct's stored
-/// properties — the same number `Mirror` would have produced, so a view's
-/// state keys do not change with how it was bound.
+/// properties, so a view's state keys follow its declaration.
 @MainActor
 public struct DynamicPropertyBinder {
     let store: StateStore
@@ -62,13 +61,6 @@ public struct DynamicPropertyBinder {
     /// wrapper — needs nothing from the framework. The overload exists so the
     /// macro can emit a `bind` for every wrapper without knowing which are.
     public func bind<P>(_ property: P, index: Int) {}
-
-    /// For the reflective default, which only has the existential.
-    func bind(_ property: any DynamicProperty, index: Int) {
-        let key = StateKey(path: path, propertyIndex: index, viewType: viewType, viewID: viewID)
-        keys.keys.append(key)
-        property._bind(to: BindingContext(store: store, key: key, environment: environment))
-    }
 }
 
 /// Where a piece of `@State` lives: the structural position of the view that

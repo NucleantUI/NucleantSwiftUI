@@ -9,12 +9,6 @@
 //  See plan.md / PROCESS.md at the package root for the design and its limits.
 //
 
-/// Version of the framework surface, bumped when the public API changes shape.
-public enum NucleantUI {
-    public static let version = "0.1.0"
-}
-
-
 public extension Double {
     var float: Float { .init(self) }
 }

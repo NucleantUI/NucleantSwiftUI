@@ -11,16 +11,19 @@
 public struct ViewBuilder {
 
     /// Every view expression in a body passes through here, and the implicit
-    /// call sits on the expression — so this is the one place a view's call
-    /// site is actually known, whatever initializer it went through. A
-    /// `@View` struct stores it; the default setter on a plain `View` drops
-    /// it, and that view is then identified by type and position alone.
-    /// `#viewID` expands at that implicit call, to a literal: no string, no
-    /// hashing, per expression per body run.
+    /// call sits on the expression — so a view whose initializer could not
+    /// see its call site gets the expression's here. One that already has
+    /// its own keeps it: that is the more precise of the two, and the only
+    /// one that tells apart the two views of `flag ? Row("a") : Row("b")`,
+    /// one expression with two call sites. The default setter on a plain
+    /// `View` drops it, and that view is then identified by type and
+    /// position alone. `#viewID` expands at that implicit call, to a
+    /// literal: no string, no hashing, per expression per body run.
     public static func buildExpression<Content: View>(
         _ content: Content,
         _viewID: ViewID = #viewID
     ) -> Content {
+        guard content._viewID == .unknown else { return content }
         var content = content
         content._viewID = _viewID
         return content

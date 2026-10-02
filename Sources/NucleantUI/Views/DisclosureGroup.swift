@@ -150,22 +150,26 @@ public protocol DisclosureGroupStyle {
 public struct DisclosureGroupStyleConfiguration {
 
     /// The group's label.
+    @View
     public struct Label: View {
         let build: @MainActor (inout BuildContext) -> ViewNode
 
-        init(_ build: @escaping @MainActor (inout BuildContext) -> ViewNode) {
+        init(_viewID: ViewID = #viewID, _ build: @escaping @MainActor (inout BuildContext) -> ViewNode) {
             self.build = build
+            self._viewID = _viewID
         }
 
         public var body: Never { bodyUnavailable() }
     }
 
     /// The group's content. Only built if the style places it.
+    @View
     public struct Content: View {
         let build: @MainActor (inout BuildContext) -> ViewNode
 
-        init(_ build: @escaping @MainActor (inout BuildContext) -> ViewNode) {
+        init(_viewID: ViewID = #viewID, _ build: @escaping @MainActor (inout BuildContext) -> ViewNode) {
             self.build = build
+            self._viewID = _viewID
         }
 
         public var body: Never { bodyUnavailable() }

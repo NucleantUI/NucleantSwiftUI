@@ -222,6 +222,7 @@ struct TopicBubble {
 /// arriving level. Both ends are its `animatableData`, so when Tidy Up
 /// moves the topics under an animation the curve follows them all the way
 /// instead of jumping to where they end up.
+@View
 struct BranchShape: Shape {
     var from: Point
     var to: Point

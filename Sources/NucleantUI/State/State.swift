@@ -17,8 +17,8 @@
 @MainActor
 public struct State<Value>: DynamicProperty {
 
-    /// The one reference that survives `Mirror`'s copy of the wrapper. Binding
-    /// fills in `storage`; `wrappedValue` reads through it.
+    /// The one reference every copy of the wrapper shares. Binding fills in
+    /// `storage`; `wrappedValue` reads through it.
     final class Holder {
         var storage: StateStorage<Value>?
     }

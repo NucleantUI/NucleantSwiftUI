@@ -11,7 +11,7 @@
 import NucleantWindow
 
 /// A view that displays nothing.
-public struct EmptyView: View {
+public struct EmptyView: View, Equatable {
     public init() {}
     public var body: Never { bodyUnavailable() }
 }
@@ -67,8 +67,10 @@ extension _ViewArray: BuiltinView {
     }
 }
 
-/// One of two branches of an `if`/`else` in a `@ViewBuilder`.
-public struct _ConditionalContent<TrueContent: View, FalseContent: View>: View {
+/// One of two branches of an `if`/`else` in a builder. A view when both
+/// branches are views; `Commands.swift` makes it commands the same way.
+@MainActor
+public struct _ConditionalContent<TrueContent, FalseContent> {
     @frozen
     public enum Storage {
         case trueContent(TrueContent)
@@ -80,11 +82,14 @@ public struct _ConditionalContent<TrueContent: View, FalseContent: View>: View {
     public init(storage: Storage) {
         self.storage = storage
     }
+}
 
+extension _ConditionalContent: ViewInput where TrueContent: View, FalseContent: View {}
+extension _ConditionalContent: View where TrueContent: View, FalseContent: View {
     public var body: Never { bodyUnavailable() }
 }
 
-extension _ConditionalContent: BuiltinView {
+extension _ConditionalContent: BuiltinView where TrueContent: View, FalseContent: View {
     func makeNode(_ context: inout BuildContext) -> ViewNode {
         // Each branch gets its own path slot, so flipping the condition
         // discards the other branch's `@State` instead of aliasing onto it.
@@ -159,6 +164,7 @@ extension AnyView: BuiltinView {
 /// the host is presenting — popovers, a context menu. Two fixed slots, so
 /// the root keeps its path (`[0]`) whether or not anything is over it, and
 /// a presentation coming and going only rebuilds slot `[1]`.
+@View
 struct _HostRoot: View {
     let content: AnyView
     let overlay: AnyView?
@@ -184,6 +190,7 @@ final class OverlayCapture {
 
 /// Slot `[1]`: the open popovers, and over them the context menu if one is
 /// open — a menu opened from a popover's content sits above it.
+@View
 struct _HostOverlay: View {
     let popovers: PopoverPresenter
     let contextMenu: ContextMenuOverlay?
